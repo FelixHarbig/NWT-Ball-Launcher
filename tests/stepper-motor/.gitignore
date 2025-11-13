@@ -1,0 +1,36 @@
+# Build artifacts
+/build/
+sdkconfig.old
+sdkconfig
+# TODO remove sdkconfig for person detection6+3
+
+# ESP-IDF specific
+*.bin
+*.elf
+*.map
+*.log
+*.pyc
+*.tmp
+
+# Compiler outputs
+*.o
+*.d
+*.a
+
+# CMake and Ninja
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+build.ninja
+compile_commands.json
+
+# Flashing and partition files
+*.bin
+*.hex
+*.map
+*.csv
+*.bin.old
+
+# VSCode / CLion / IDE stuff
+.vscode/
+.idea/
