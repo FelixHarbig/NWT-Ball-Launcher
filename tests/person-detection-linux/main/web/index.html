@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ESP32 Person Locator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="main">
+    <h1>ESP32 Person Detection</h1>
+    <p>Upload an image to find where people are located.</p>
+
+    <div id="controls">
+      <input type="file" id="file" accept="image/*">
+      <button id="btnStart">Start Detection</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="canvasContainer">
+      <canvas id="preview"></canvas>
+    </div>
+    <div id="results"></div>
+  </div>
+
+  <script>
+  const W = 96, H = 96;
+  const canvas = document.getElementById('preview');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const resultsEl = document.getElementById('results');
+  let img = null;
+
+  async function readFileAsImage(file) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      const image = new Image();
+      fr.onload = e => image.src = e.target.result;
+      image.onload = () => res(image);
+      image.onerror = rej;
+      fr.readAsDataURL(file);
+    });
+  }
+
+  function toGrayData(sourceImg, x=0, y=0, w=sourceImg.width, h=sourceImg.height) {
+    const tmp = document.createElement('canvas');
+    tmp.width = W; tmp.height = H;
+    const tmpCtx = tmp.getContext('2d');
+    tmpCtx.drawImage(sourceImg, x, y, w, h, 0, 0, W, H);
+    const imgd = tmpCtx.getImageData(0, 0, W, H);
+    const data = new Uint8Array(W*H);
+    for (let i = 0, j = 0; i < imgd.data.length; i += 4, j++) {
+      const r = imgd.data[i], g = imgd.data[i+1], b = imgd.data[i+2];
+      data[j] = Math.round(0.299*r + 0.587*g + 0.114*b);
+    }
+    return data;
+  }
+
+  async function infer(data) {
+    const resp = await fetch('/infer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/octet-stream'},
+      body: data
+    });
+    return await resp.json();
+  }
+
+  function drawBox(x, y, w, h, conf, human) {
+    const color = human ? (conf > 0.75 ? "lime" : "yellow") : "red";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = color;
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillText(`${Math.round(conf*100)}%`, x+5, y+20);
+  }
+
+  async function scanRegion(x, y, w, h, level=1) {
+    const gray = toGrayData(img, x, y, w, h);
+    const res = await infer(gray);
+    drawBox(x, y, w, h, res.confidence, res.human);
+    resultsEl.innerHTML += `<p>Level ${level} region (${x},${y}) size ${w}x${h}: ${res.human?"🟢 person":"🔴 none"} (${(res.confidence*100).toFixed(1)}%)</p>`;
+
+    if (level < 2 && res.human) {
+      // divide into 2x2
+      const halfW = w/2, halfH = h/2;
+      const sub = [
+        [x, y, halfW, halfH],
+        [x+halfW, y, halfW, halfH],
+        [x, y+halfH, halfW, halfH],
+        [x+halfW, y+halfH, halfW, halfH],
+      ];
+      for (const r of sub) await scanRegion(...r, level+1);
+    }
+  }
+
+  async function scanAllQuads(level=1) {
+    const halfW = canvas.width / 2, halfH = canvas.height / 2;
+    const quads = [
+      [0, 0, halfW, halfH],
+      [halfW, 0, halfW, halfH],
+      [0, halfH, halfW, halfH],
+      [halfW, halfH, halfW, halfH],
+    ];
+    for (const q of quads) await scanRegion(...q, level);
+  }
+
+  document.getElementById('btnStart').onclick = async () => {
+    const f = document.getElementById('file').files[0];
+    if (!f) return alert('Choose an image first!');
+    resultsEl.innerHTML = '';
+    statusEl.innerText = 'Loading image...';
+    img = await readFileAsImage(f);
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+
+    statusEl.innerText = 'Checking whole image...';
+    const gray = toGrayData(img);
+    const res = await infer(gray);
+    drawBox(0, 0, canvas.width, canvas.height, res.confidence, res.human);
+    resultsEl.innerHTML += `<p><b>Full image:</b> ${res.human?"🟢 person":"🔴 none"} (${(res.confidence*100).toFixed(1)}%)</p>`;
+
+    if (!res.human) {
+      statusEl.innerText = 'No clear person found — scanning 2x2 to verify...';
+      await scanAllQuads(1);
+    } else {
+      statusEl.innerText = 'Person detected — scanning 2x2 regions...';
+      await scanAllQuads(1);
+    }
+
+    statusEl.innerText = 'Scan complete!';
+  };
+  </script>
+</body>
+</html>
