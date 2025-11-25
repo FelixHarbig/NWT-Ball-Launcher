@@ -41,7 +41,6 @@ It’s ideal for:
 ---
 
 ### Example Setup
-> *(Placeholder — add your own images here)*
 
 ![Stepper](../images/stepper.jpg)
 
