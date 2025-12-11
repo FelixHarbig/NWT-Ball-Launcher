@@ -22,11 +22,11 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.4.3
+    version: 5.3.0
 direct_dependencies:
 - espressif/esp-nn
 - espressif/esp_jpeg
 - idf
-manifest_hash: 9ac288449a11137f5fe2797bc1ed4b7c2059282f829173b4ac85988e74b0c0e3
+manifest_hash: ae4e5c4bab8846ddc6e05d2cfa2b4c53d0da173bba74797419c3b07708959c94
 target: esp32
 version: 2.0.0

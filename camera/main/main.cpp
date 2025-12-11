@@ -1,107 +1,196 @@
-// main.cpp
+// main.cpp - Camera ESP (The "Eye")
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "nvs_flash.h"
+#include "driver/ledc.h"
 
-#include "app_camera.h"         // you already have this header
-#include "person_detection.h"   // you already have this header
-#include "sd_utils.h"           // we provide sd_utils.cpp (header assumed present)
-#include "motor_control.h"  
-#include "web_server.h"     // your existing firing functions
+#include "app_camera.h"
+#include "person_detection.h"
+#include "sd_utils.h"
+#include "api_client.h" // New helper for Main ESP comms
 
-static const char *TAG = "main";
+static const char *TAG = "CAM_MAIN";
 
-// target crop size (square) so 3x3 cells are 96x96
+// --- Configuration ---
 constexpr int CROP_SIZE = 288;
 constexpr char SD_PGM_PATH[] = "/sdcard/test.pgm";
 
-extern "C" void app_main(void) {
-    ESP_LOGI(TAG, "Starting app");
+// Servo Configuration (Pin 16)
+#define SERVO_PIN 16
+#define SERVO_CHANNEL LEDC_CHANNEL_1
+#define SERVO_TIMER LEDC_TIMER_1
+#define SERVO_MODE LEDC_HIGH_SPEED_MODE
 
-    // 1) Init camera
-    esp_err_t err = app_camera_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Camera init failed: 0x%X", err);
+// Servo Angles (Duty Cycles for 50Hz 15-bit)
+// 0.5ms (~820) to 2.5ms (~4100)
+// Adjust these based on your mechanism
+#define SERVO_REST_DUTY 1638 // ~1.0ms
+#define SERVO_FIRE_DUTY 3276 // ~2.0ms 
+
+// --- Wi-Fi Station Setup ---
+static void wifi_init_sta()
+{
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    wifi_config_t wifi_config = {};
+    strcpy((char*)wifi_config.sta.ssid, "ESP32-AP");
+    strcpy((char*)wifi_config.sta.password, "12345678");
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_connect());
+    
+    // Wait for connection (simple delay for prototype, use event group in prod)
+    ESP_LOGI(TAG, "Connecting to Main ESP Wi-Fi...");
+    vTaskDelay(pdMS_TO_TICKS(5000));
+}
+
+// --- Servo Control ---
+static void servo_init() {
+    ledc_timer_config_t timer_conf = {
+        .duty_resolution = LEDC_TIMER_15_BIT,
+        .freq_hz = 50,
+        .speed_mode = SERVO_MODE,
+        .timer_num = SERVO_TIMER,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_timer_config(&timer_conf);
+
+    ledc_channel_config_t channel_conf = {
+        .channel = SERVO_CHANNEL,
+        .duty = SERVO_REST_DUTY,
+        .gpio_num = SERVO_PIN,
+        .intr_type = LEDC_INTR_DISABLE,
+        .speed_mode = SERVO_MODE,
+        .timer_sel = SERVO_TIMER,
+    };
+    ledc_channel_config(&channel_conf);
+}
+
+static void servo_fire() {
+    ESP_LOGI(TAG, "FIRING_SERVO!");
+    // Move to Fire position
+    ledc_set_duty(SERVO_MODE, SERVO_CHANNEL, SERVO_FIRE_DUTY);
+    ledc_update_duty(SERVO_MODE, SERVO_CHANNEL);
+    vTaskDelay(pdMS_TO_TICKS(500)); 
+    
+    // Return to Rest
+    ledc_set_duty(SERVO_MODE, SERVO_CHANNEL, SERVO_REST_DUTY);
+    ledc_update_duty(SERVO_MODE, SERVO_CHANNEL);
+    vTaskDelay(pdMS_TO_TICKS(500));
+}
+
+// --- Main App ---
+extern "C" void app_main(void) {
+    ESP_ERROR_CHECK(nvs_flash_init());
+    
+    // 1. Init Wi-Fi (Client)
+    wifi_init_sta();
+
+    // 2. Init Camera
+    if (app_camera_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Camera init failed");
         return;
     }
 
-    // 2) Mount SD
+    // 3. Init SD Card
     if (sd_mount_card() != ESP_OK) {
         ESP_LOGE(TAG, "SD mount failed");
         return;
     }
-    
-    FILE* f = fopen("/sdcard/test.txt", "w");
-    if (!f) ESP_LOGE(TAG, "Cannot write test file");
-    else { fprintf(f,"ok\n"); fclose(f); }
 
-    FILE* fa = fopen("/sdcard/bubba.pgm", "wb");
-    if (!fa) ESP_LOGE(TAG, "Cannot write test file2");
-    else { fprintf(fa,"ok\n"); fclose(fa); }
-
-
-    // 3) Init detector
+    // 4. Init Detection
     if (person_detection_init() != ESP_OK) {
         ESP_LOGE(TAG, "Person detection init failed");
         return;
     }
 
-    if (start_web_server() != ESP_OK) {
-        ESP_LOGE("main", "Web server failed to start");
-        return;
-    }
+    // 5. Init Servo
+    servo_init();
 
-    // 4) Init motor_control if you have one
-    // motor_control_init(); // assume this exists and handles readiness checks
+    ESP_LOGI(TAG, "System Initialized. Starting Detection Loop...");
 
-    // 5) Main detection task (single task here)
-    xTaskCreate([](void*) {
-        detection_result_t result;
-        while (true) {
-            // Capture frame
-            camera_fb_t* fb = app_camera_get_frame();
-            if (!fb) {
-                ESP_LOGW(TAG, "No frame");
-                vTaskDelay(pdMS_TO_TICKS(200));
-                continue;
-            }
-
-            // Save centered 288x288 PGM to SD (reads from fb->buf which is grayscale)
-            if (sd_save_center_crop_pgm(fb, CROP_SIZE, SD_PGM_PATH) != ESP_OK) {
-                ESP_LOGW(TAG, "Failed saving cropped PGM");
-                app_camera_return_frame(fb);
-                vTaskDelay(pdMS_TO_TICKS(200));
-                continue;
-            }
-
-            // Return FB asap to free PSRAM
-            app_camera_return_frame(fb);
-
-            // Run detection sequence based on on-disk PGM
-            bool should_fire = detect_person_from_sd(SD_PGM_PATH, &result);
-
-            if (should_fire) {
-                ESP_LOGI(TAG, "Target in center and confirmed. Fire sequence.");
-
-                if (is_ready_to_fire()) {
-                    // example firing flow, adapt to your motor_control/servo API
-                    stepper_load(2); // existing function
-                    servo_set_angle(SERVO_FIRE_ANGLE);
-                    vTaskDelay(pdMS_TO_TICKS(1000));
-                    servo_set_angle(SERVO_DEFAULT_ANGLE);
-                    vTaskDelay(pdMS_TO_TICKS(5000)); // cooldown
-                } else {
-                    ESP_LOGW(TAG, "Not ready to fire");
-                }
-            } else {
-                ESP_LOGI(TAG, "No confirmed target in center this cycle");
-            }
-
-            // small delay between capture cycles
-            vTaskDelay(pdMS_TO_TICKS(250));
+    // Main Loop
+    while (true) {
+        // A. Capture Frame
+        camera_fb_t* fb = app_camera_get_frame();
+        if (!fb) {
+            ESP_LOGW(TAG, "Capture failed");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
         }
-    }, "detection_task", 16 * 1024, nullptr, 5, nullptr);
 
-    ESP_LOGI(TAG, "Main initialized");
+        // B. Save to SD (Required for current detection lib)
+        if (sd_save_center_crop_pgm(fb, CROP_SIZE, SD_PGM_PATH) != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to save PGM");
+            app_camera_return_frame(fb);
+            continue;
+        }
+        app_camera_return_frame(fb); // Free memory asap
+
+        // C. Detect
+        detection_result_t result;
+        bool found = detect_person_from_sd(SD_PGM_PATH, &result);
+
+        if (found) {
+            // Person detected in global 3x3 grid
+            // Grid layout:
+            // 0,0 | 0,1 | 0,2
+            // 1,0 | 1,1 | 1,2 (Center)
+            // 2,0 | 2,1 | 2,2
+            
+            ESP_LOGI(TAG, "Target Found at [%d, %d]", result.row, result.col);
+
+            if (result.row == 1 && result.col == 1) {
+                // --- TARGET CENTERED ---
+                ESP_LOGI(TAG, "Target Centered! Checking ball status...");
+                
+                if (api_check_ball_status()) {
+                    ESP_LOGW(TAG, "Ball Ready -> SHOOTING!");
+                    servo_fire();
+                    // Cooldown
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                } else {
+                    ESP_LOGI(TAG, "No Ball ready. Waiting...");
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                }
+
+            } else {
+                // --- TARGET OFF-CENTER ---
+                // Calculate move direction
+                // If col < 1 (Left) -> Move Stepper Neg
+                // If col > 1 (Right) -> Move Stepper Pos
+                // (Row checks could drive tank forward/back if desired)
+                
+                int steps = 0;
+                if (result.col < 1) steps = -50; // Move Left
+                else if (result.col > 1) steps = 50;  // Move Right
+                
+                if (steps != 0) {
+                    ESP_LOGI(TAG, "Adjusting Aim: %d steps", steps);
+                    api_send_stepper_command(steps);
+                    // Wait for move to likely complete
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                }
+            }
+        } else {
+            // --- NO TARGET ---
+            // Optional: Roam or Scan
+            // For now, just wait
+            ESP_LOGI(TAG, "No target.");
+            vTaskDelay(pdMS_TO_TICKS(100)); // Scan interval
+        }
+    }
 }
+
