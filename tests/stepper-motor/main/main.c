@@ -7,33 +7,17 @@
 void ultrasonic_test(void *pvParameters)
 {
 
-gpio_set_direction(GPIO_NUM_27,GPIO_MODE_OUTPUT);
-gpio_set_direction(GPIO_NUM_26, GPIO_MODE_OUTPUT);
-gpio_set_direction(GPIO_NUM_25,GPIO_MODE_OUTPUT);
-gpio_set_direction(GPIO_NUM_33,GPIO_MODE_OUTPUT);
+gpio_set_direction(GPIO_NUM_12,GPIO_MODE_OUTPUT);
+gpio_set_direction(GPIO_NUM_13, GPIO_MODE_OUTPUT);
+gpio_set_direction(GPIO_NUM_14,GPIO_MODE_OUTPUT);
+gpio_set_direction(GPIO_NUM_16,GPIO_MODE_OUTPUT);
 
 // 512 in this configuration is exactly one full rotation
 for (int i=0; i < 512; i++){
-    gpio_set_level(GPIO_NUM_27,1);
-    gpio_set_level(GPIO_NUM_26,0) ;
-    gpio_set_level(GPIO_NUM_25,0);
-    gpio_set_level(GPIO_NUM_33,0);
-    ets_delay_us(2000);
-    gpio_set_level(GPIO_NUM_27,0) ;
-    gpio_set_level(GPIO_NUM_26,1);
-    gpio_set_level(GPIO_NUM_25,0) ;
-    gpio_set_level(GPIO_NUM_33,0);
-    ets_delay_us(2000);
-    gpio_set_level(GPIO_NUM_27,0) ;
-    gpio_set_level(GPIO_NUM_26,0) ;
-    gpio_set_level(GPIO_NUM_25,1);
-    gpio_set_level(GPIO_NUM_33,0);
-    ets_delay_us(2000);
-    gpio_set_level(GPIO_NUM_27,0) ;
-    gpio_set_level(GPIO_NUM_26,0) ;
-    gpio_set_level(GPIO_NUM_25,0);
-    gpio_set_level(GPIO_NUM_33,1);
-    ets_delay_us(2000);
+    gpio_set_level(GPIO_NUM_16,0);
+    ets_delay_us(2000000);
+    gpio_set_level(GPIO_NUM_16,1);
+    ets_delay_us(2000000);
 }
 
 ets_delay_us(2000000);

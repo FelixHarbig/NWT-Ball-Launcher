@@ -1,32 +1,36 @@
-# _Sample project_
+# ESP32 Person detection web (tflite-micro)
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+This project is a showcase **how well the esp32 can detect people in images**. It is only really possible trough ESP-IDF as there are no well supported compatability layers for other frameworks.
 
-This is the simplest buildable example. The example is used by command `idf.py create-project`
-that copies the project to user specified path and set it's name. For more information follow the [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project)
+---
 
+## Overview
 
+The esp32 hosts an access point and a web interface (usually found at 192.168.4.1). It recieves a picture (or part of a picture) from the web and returns the confidence of a person being there.
+This script is local and the entire model works on the esp32.
 
-## How to use example
-We encourage the users to use the example as a template for the new projects.
-A recommended way is to follow the instructions on a [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project).
+---
 
-## Example folder contents
+## Hardware Setup
 
-The project **sample_project** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
+| Component | Description |
+|------------|-------------|
+| **Microcontroller** | ESP32 (ESP-IDF framework) |
 
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt`
-files that provide set of directives and instructions describing the project's source files and targets
-(executable, library, or both). 
+---
 
-Below is short explanation of remaining files in the project folder.
+## Wiring
 
-```
-├── CMakeLists.txt
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
-```
-Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
-They are not used or needed when building with CMake and idf.py.
+The esp32 only needs to be connected to power. This is usually achieved trough plugging in the micro-USB. Of course a 5V connection can also be used directly.
+
+---
+
+### Example Setup
+
+![esp32](../images/esp32.jpg)
+
+---
+
+## How It Works
+
+The script uses a pretrained model from the [esp32 tflite-micro example](TODO insert link here) to detect people.

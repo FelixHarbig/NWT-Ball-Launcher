@@ -29,12 +29,13 @@ This configuration ensures proper pulse widths for MG90S without overshooting, s
 
 
 void servoRotate_task(void *args) {
-    const int duty_min  =  819;      // ~500 µs (full left)
-    const int duty_max  = 4095;     // saturated ~2500 µs (full right)
+    const int duty_min  =  1802;      // ~500 µs (full left)
+    const int duty_max  = 3112;     // saturated ~2500 µs (full right)
     int       duty      = duty_min;
     const int step      =   10;      // adjust for smoothness
     const int iter_ms   =   10;      // delay per step
     bool      increasing = true;
+    int stop_debug = 1;
 
     ledc_timer_config_t timer_conf = {
         .duty_resolution = LEDC_TIMER_15_BIT,
@@ -48,7 +49,7 @@ void servoRotate_task(void *args) {
     ledc_channel_config_t channel_conf = {
         .channel    = LEDC_CHANNEL_0,
         .duty       = duty,
-        .gpio_num   = 25,
+        .gpio_num   = 12, // 25 works with esp32 12 16 13 15 14 2
         .intr_type  = LEDC_INTR_DISABLE,
         .speed_mode = LEDC_HIGH_SPEED_MODE,
         .timer_sel  = LEDC_TIMER_0,
@@ -56,9 +57,13 @@ void servoRotate_task(void *args) {
     ledc_channel_config(&channel_conf);
 
     while (true) {
+
+        for(int i = 0; stop_debug < (duty_max - duty_min)*0.1; i++) {
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
         printf("Duty = %d\n", duty);
+        printf("i = %d\n", i);
+
 
         if (increasing) {
             duty += step;
@@ -75,6 +80,25 @@ void servoRotate_task(void *args) {
         }
 
         vTaskDelay(iter_ms / portTICK_PERIOD_MS);
+    }
+    for(int duty = duty_min; duty < 2200; duty += 10){
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        vTaskDelay(iter_ms / portTICK_PERIOD_MS);
+        printf("Duty = %d\n", duty);
+    }
+
+
+    
+
+    while(true) {
+    duty = 2600;
+    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+    vTaskDelay(iter_ms / portTICK_PERIOD_MS);
+    printf("Duty = %d\n", duty);
+    }
+
     }
 }
 

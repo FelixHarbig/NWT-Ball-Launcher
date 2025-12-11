@@ -310,32 +310,6 @@ static esp_err_t infer_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// static void start_webserver(void)
-// {
-//     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-//     config.stack_size = 4096;
-//     httpd_handle_t server = NULL;
-//     if (httpd_start(&server, &config) != ESP_OK) {
-//         ESP_LOGE(TAG, "Failed to start http server");
-//         return;
-//     }
-
-//     httpd_uri_t index_uri = {};
-//     index_uri.uri = "/";
-//     index_uri.method = HTTP_GET;
-//     index_uri.handler = index_get_handler;
-//     index_uri.user_ctx = NULL;
-//     httpd_register_uri_handler(server, &index_uri);
-
-//     httpd_uri_t infer_uri = {};
-//     infer_uri.uri = "/infer";
-//     infer_uri.method = HTTP_POST;
-//     infer_uri.handler = infer_post_handler;
-//     infer_uri.user_ctx = NULL;
-//     httpd_register_uri_handler(server, &infer_uri);
-
-//     ESP_LOGI(TAG, "HTTP server started");
-// }
 
 static void start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
