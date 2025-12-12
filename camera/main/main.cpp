@@ -19,8 +19,8 @@ static const char *TAG = "CAM_MAIN";
 constexpr int CROP_SIZE = 288;
 constexpr char SD_PGM_PATH[] = "/sdcard/test.pgm";
 
-// Servo Configuration (Pin 16)
-#define SERVO_PIN 16
+// Servo Configuration (Pin 13 - Pin 16 is PSRAM CS on WROVER and causes crash)
+#define SERVO_PIN 13
 #define SERVO_CHANNEL LEDC_CHANNEL_1
 #define SERVO_TIMER LEDC_TIMER_1
 #define SERVO_MODE LEDC_HIGH_SPEED_MODE
