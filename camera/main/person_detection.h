@@ -64,4 +64,16 @@ void person_detection_deinit(void);
  */
 bool detect_person_in_center(camera_fb_t *fb, detection_result_t *result);
 
+/**
+ * @brief Strategy V2:
+ * 1. Scan Middle (1,1) of 3x3. If person -> result=CENTER (row=1,col=1).
+ * 2. Scan other 8 cells. If person -> result={r,c}.
+ * 3. Scan Full Image (1x1). If person -> result=CENTER (row=1,col=1).
+ *
+ * @param path Path to PGM file on SD card
+ * @param[out] result Result structure
+ * @return true if person found (check result.row/col to see where)
+ */
+bool detect_person_strategy_v2(const char *path, detection_result_t *result);
+
 #endif // PERSON_DETECTION_H

@@ -13,6 +13,8 @@
 #include "sd_utils.h"
 #include "api_client.h" // New helper for Main ESP comms
 
+#include "web_server.h" // Restored
+
 static const char *TAG = "CAM_MAIN";
 
 // --- Configuration ---
@@ -110,17 +112,23 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "SD mount failed");
         return;
     }
+    
+    // 4. Start Web Server (For Image Debugging)
+    if (start_web_server() != ESP_OK) {
+        ESP_LOGE(TAG, "Web server failed to start");
+        // Proceed anyway
+    }
 
-    // 4. Init Detection
+    // 5. Init Detection
     if (person_detection_init() != ESP_OK) {
         ESP_LOGE(TAG, "Person detection init failed");
         return;
     }
 
-    // 5. Init Servo
+    // 6. Init Servo
     servo_init();
 
-    ESP_LOGI(TAG, "System Initialized. Starting Detection Loop...");
+    ESP_LOGI(TAG, "System Initialized. Starting Detection Loop (V2)...");
 
     // Main Loop
     while (true) {
@@ -132,7 +140,7 @@ extern "C" void app_main(void) {
             continue;
         }
 
-        // B. Save to SD (Required for current detection lib)
+        // B. Save to SD (Required for current detection lib AND web server debug)
         if (sd_save_center_crop_pgm(fb, CROP_SIZE, SD_PGM_PATH) != ESP_OK) {
             ESP_LOGW(TAG, "Failed to save PGM");
             app_camera_return_frame(fb);
@@ -140,27 +148,21 @@ extern "C" void app_main(void) {
         }
         app_camera_return_frame(fb); // Free memory asap
 
-        // C. Detect
+        // C. Detect using Strategy V2
         detection_result_t result;
-        bool found = detect_person_from_sd(SD_PGM_PATH, &result);
+        bool found = detect_person_strategy_v2(SD_PGM_PATH, &result);
 
         if (found) {
-            // Person detected in global 3x3 grid
-            // Grid layout:
-            // 0,0 | 0,1 | 0,2
-            // 1,0 | 1,1 | 1,2 (Center)
-            // 2,0 | 2,1 | 2,2
-            
-            ESP_LOGI(TAG, "Target Found at [%d, %d]", result.row, result.col);
+            ESP_LOGI(TAG, "Target Found at [%d, %d] Conf: %.2f", result.row, result.col, result.confidence);
 
+            // Center (1,1) is hit if Middle Scan OR Full Scan matched.
             if (result.row == 1 && result.col == 1) {
-                // --- TARGET CENTERED ---
+                // --- TARGET CENTERED / VERY NEAR ---
                 ESP_LOGI(TAG, "Target Centered! Checking ball status...");
                 
                 if (api_check_ball_status()) {
                     ESP_LOGW(TAG, "Ball Ready -> SHOOTING!");
                     servo_fire();
-                    // Cooldown
                     vTaskDelay(pdMS_TO_TICKS(2000));
                 } else {
                     ESP_LOGI(TAG, "No Ball ready. Waiting...");
@@ -169,27 +171,28 @@ extern "C" void app_main(void) {
 
             } else {
                 // --- TARGET OFF-CENTER ---
-                // Calculate move direction
-                // If col < 1 (Left) -> Move Stepper Neg
-                // If col > 1 (Right) -> Move Stepper Pos
-                // (Row checks could drive tank forward/back if desired)
+                // Improve simple logic:
+                // Grid:
+                // 0,0 0,1 0,2
+                // 1,0 1,1 1,2
+                // 2,0 2,1 2,2
                 
                 int steps = 0;
-                if (result.col < 1) steps = -50; // Move Left
-                else if (result.col > 1) steps = 50;  // Move Right
+                // Simple Horizontal Logic
+                if (result.col < 1) steps = -50;       // Left
+                else if (result.col > 1) steps = 50;   // Right
+                
+                // Note: Could add Row logic for Tank Forward/Back here
                 
                 if (steps != 0) {
                     ESP_LOGI(TAG, "Adjusting Aim: %d steps", steps);
                     api_send_stepper_command(steps);
-                    // Wait for move to likely complete
                     vTaskDelay(pdMS_TO_TICKS(500));
                 }
             }
         } else {
             // --- NO TARGET ---
-            // Optional: Roam or Scan
-            // For now, just wait
-            ESP_LOGI(TAG, "No target.");
+            ESP_LOGI(TAG, "No target found in any scan.");
             vTaskDelay(pdMS_TO_TICKS(100)); // Scan interval
         }
     }

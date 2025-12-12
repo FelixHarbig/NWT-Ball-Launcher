@@ -1,6 +1,7 @@
 set(srcs "main.cpp"
         "app_camera.cpp"
         "person_detection.cpp"
+        "web_server.cpp"
         "person_detect_model_data.cc"
         "sd_utils.cpp")
 

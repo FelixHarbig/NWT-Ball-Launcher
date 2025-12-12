@@ -305,3 +305,86 @@ bool detect_person_from_sd(const char* pgm_path, detection_result_t* out_result)
     return false;
 }
 
+// ----------------------------------------------------------------------
+// Strategy V2 Implementation
+// ----------------------------------------------------------------------
+bool detect_person_strategy_v2(const char* pgm_path, detection_result_t* out_result) {
+    const int IMG_W = 288;
+    const int IMG_H = 288;
+    // 3x3 cells means each cell is 96x96
+    const int cell_w = 96;
+    const int cell_h = 96;
+
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(cell_w * cell_h, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) {
+        ESP_LOGE(TAG, "malloc buf failed");
+        return false;
+    }
+
+    // 1. Scan Middle (1,1)
+    ESP_LOGI(TAG, "Strategy V2: Scanning Center (1,1)");
+    if (read_region_from_pgm(pgm_path, IMG_W, IMG_H, cell_w, cell_h, cell_w, cell_h, buf)) {
+        float conf = run_inference_on_region_buffer(buf, cell_w, cell_h);
+        if (conf > DETECTION_CONFIDENCE_THRESHOLD) {
+            ESP_LOGI(TAG, "Found in Center! Conf: %.2f", conf);
+            out_result->row = 1;
+            out_result->col = 1;
+            out_result->confidence = conf;
+            free(buf);
+            return true;
+        }
+    }
+
+    // 2. Scan Other 8 cells
+    ESP_LOGI(TAG, "Strategy V2: Scanning Surroundings");
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            if (r == 1 && c == 1) continue; // Skip center
+
+            int sx = c * cell_w;
+            int sy = r * cell_h;
+            if (read_region_from_pgm(pgm_path, IMG_W, IMG_H, sx, sy, cell_w, cell_h, buf)) {
+                float conf = run_inference_on_region_buffer(buf, cell_w, cell_h);
+                if (conf > DETECTION_CONFIDENCE_THRESHOLD) {
+                    ESP_LOGI(TAG, "Found at [%d, %d] Conf: %.2f", r, c, conf);
+                    out_result->row = r;
+                    out_result->col = c;
+                    out_result->confidence = conf;
+                    free(buf);
+                    return true;
+                }
+            }
+        }
+    }
+    free(buf);
+
+    // 3. Scan Full Image (1x1)
+    ESP_LOGI(TAG, "Strategy V2: Scanning Full Frame (Very Near?)");
+    // Reuse PGM buffer logic but need full size buffer or just resize directly?
+    // Run inference helper resizes whatever buffer is passed.
+    // Full image is 288x288.
+    
+    int full_bytes = IMG_W * IMG_H;
+    uint8_t* fbuf = (uint8_t*)heap_caps_malloc(full_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!fbuf) {
+        ESP_LOGE(TAG, "malloc fbuf failed");
+        return false;
+    }
+
+    if (read_region_from_pgm(pgm_path, IMG_W, IMG_H, 0, 0, IMG_W, IMG_H, fbuf)) {
+        float conf = run_inference_on_region_buffer(fbuf, IMG_W, IMG_H);
+        if (conf > DETECTION_CONFIDENCE_THRESHOLD) {
+             ESP_LOGI(TAG, "Found in Full Frame! Conf: %.2f", conf);
+             // Treat as Center/Near
+             out_result->row = 1;
+             out_result->col = 1;
+             out_result->confidence = conf;
+             free(fbuf);
+             return true;
+        }
+    }
+    
+    free(fbuf);
+    ESP_LOGI(TAG, "Strategy V2: No person found.");
+    return false;
+}
