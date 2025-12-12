@@ -179,8 +179,8 @@ extern "C" void app_main(void) {
                 
                 int steps = 0;
                 // Simple Horizontal Logic
-                if (result.col < 1) steps = -50;       // Left
-                else if (result.col > 1) steps = 50;   // Right
+                if (result.col < 1) steps = -250;       // Left
+                else if (result.col > 1) steps = 250;   // Right
                 
                 // Note: Could add Row logic for Tank Forward/Back here
                 
