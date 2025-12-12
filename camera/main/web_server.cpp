@@ -135,39 +135,6 @@ static esp_err_t index_handler(httpd_req_t *req) {
 
 // --- Wi‑Fi SoftAP Setup ---
 
-static void wifi_init_softap(void)
-{
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_ap();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    wifi_config_t wifi_config = {};
-    // SSID and password provided via macros (ensure they are defined)
-    strncpy((char *)wifi_config.ap.ssid, WIFI_AP_SSID, sizeof(wifi_config.ap.ssid));
-    wifi_config.ap.ssid[sizeof(wifi_config.ap.ssid) - 1] = '\0';
-    wifi_config.ap.ssid_len = strlen((char *)wifi_config.ap.ssid);
-
-    if (strlen(WIFI_AP_PASS) > 0) {
-        strncpy((char *)wifi_config.ap.password, WIFI_AP_PASS, sizeof(wifi_config.ap.password));
-        wifi_config.ap.password[sizeof(wifi_config.ap.password) - 1] = '\0';
-        wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    } else {
-        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
-    }
-
-    wifi_config.ap.channel = 1;
-    wifi_config.ap.ssid_hidden = 0;
-    wifi_config.ap.max_connection = 4;
-    wifi_config.ap.beacon_interval = 100;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-}
-
 // --- Server start ---
 
 esp_err_t start_web_server()
@@ -199,16 +166,8 @@ esp_err_t start_web_server()
         .user_ctx = NULL
     };
 
-    // Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    // Start Wi‑Fi AP
-    wifi_init_softap();
+    // Note: NVS and Wi-Fi are already initialized in main.cpp (Station Mode).
+    // The server will simply bind to the active interface.
 
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
