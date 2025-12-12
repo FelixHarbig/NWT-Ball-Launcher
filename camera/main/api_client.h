@@ -16,11 +16,11 @@ static const char *API_TAG = "API_CLIENT";
  */
 static bool api_check_ball_status() {
     bool ball_ready = false;
-    esp_http_client_config_t config = {
-        .url = BASE_URL "/sensor/ball",
-        .method = HTTP_METHOD_GET,
-        .timeout_ms = 2000,
-    };
+    esp_http_client_config_t config = {};
+    config.url = BASE_URL "/sensor/ball";
+    config.method = HTTP_METHOD_GET;
+    config.timeout_ms = 2000;
+
     esp_http_client_handle_t client = esp_http_client_init(&config);
     
     if (esp_http_client_open(client, 0) == ESP_OK) {
@@ -51,11 +51,11 @@ static bool api_check_ball_status() {
  * @param steps Positive for one direction, negative for other
  */
 static void api_send_stepper_command(int steps) {
-    esp_http_client_config_t config = {
-        .url = BASE_URL "/control/stepper",
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = 2000,
-    };
+    esp_http_client_config_t config = {};
+    config.url = BASE_URL "/control/stepper";
+    config.method = HTTP_METHOD_POST;
+    config.timeout_ms = 2000;
+
     esp_http_client_handle_t client = esp_http_client_init(&config);
     
     char post_data[64];
@@ -75,11 +75,11 @@ static void api_send_stepper_command(int steps) {
  * @brief Send tank move command (Placeholder)
  */
 static void api_send_tank_command(int left, int right) {
-    esp_http_client_config_t config = {
-        .url = BASE_URL "/control/tank",
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = 1000,
-    };
+    esp_http_client_config_t config = {};
+    config.url = BASE_URL "/control/tank";
+    config.method = HTTP_METHOD_POST;
+    config.timeout_ms = 1000;
+
     esp_http_client_handle_t client = esp_http_client_init(&config);
     
     char post_data[64];

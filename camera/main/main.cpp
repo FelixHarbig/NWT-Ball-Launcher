@@ -59,21 +59,22 @@ static void wifi_init_sta()
 // --- Servo Control ---
 static void servo_init() {
     ledc_timer_config_t timer_conf = {
-        .duty_resolution = LEDC_TIMER_15_BIT,
-        .freq_hz = 50,
         .speed_mode = SERVO_MODE,
+        .duty_resolution = LEDC_TIMER_15_BIT,
         .timer_num = SERVO_TIMER,
+        .freq_hz = 50,
         .clk_cfg = LEDC_AUTO_CLK,
     };
     ledc_timer_config(&timer_conf);
 
     ledc_channel_config_t channel_conf = {
-        .channel = SERVO_CHANNEL,
-        .duty = SERVO_REST_DUTY,
         .gpio_num = SERVO_PIN,
-        .intr_type = LEDC_INTR_DISABLE,
         .speed_mode = SERVO_MODE,
+        .channel = SERVO_CHANNEL,
+        .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = SERVO_TIMER,
+        .duty = SERVO_REST_DUTY,
+        .hpoint = 0
     };
     ledc_channel_config(&channel_conf);
 }
