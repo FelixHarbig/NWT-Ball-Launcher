@@ -5,10 +5,18 @@ import time
 import math
 import sys
 import random
+import asyncio
 from ultralytics import YOLO
 from pathlib import Path
 import json
 import contextlib
+
+try:
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    print("WebSockets library not available. Run: pip install websockets")
+    WEBSOCKETS_AVAILABLE = False
 
 try:
     import termios
@@ -20,13 +28,17 @@ parser=argparse.ArgumentParser()
 parser.add_argument("--demo", action="store_true", help="Run in simulation mode with dummy GPIO")
 parser.add_argument("--no_view", action="store_true", help="Run headlessly without showing the CV2 window")
 parser.add_argument("--calibrate", action="store_true", help="Run max step calibration")
+parser.add_argument("--esp32_ip", type=str, default="192.168.4.1", help="ESP32 IP address for WebSocket connection")
+parser.add_argument("--no_esp32", action="store_true", help="Disable ESP32 car control")
 args=parser.parse_args()
 
 demo_mode = args.demo
 show_frame = not args.no_view 
 calibration_mode = args.calibrate
+esp32_ip = args.esp32_ip
+enable_esp32 = not args.no_esp32 and WEBSOCKETS_AVAILABLE
 
-print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Manual Calibration: {calibration_mode}")
+print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip})")
 
 if not demo_mode:
     import RPi.GPIO as GPIO
@@ -147,6 +159,11 @@ class TurretState:
         # Piston state
         self.piston_retracting = False
         self.piston_trigger = False  # Signal to trigger piston retraction
+
+        # ESP32 Car state
+        self.esp32_dx = 0
+        self.esp32_dy = 0
+        self.esp32_found = False
 
 state = TurretState()
 
@@ -316,6 +333,134 @@ def calibrate_steps():
 # ==========================================
 # 3. MOTOR THREAD
 # ==========================================
+
+class ESP32Client:
+    """WebSocket client for ESP32 car control"""
+    
+    def __init__(self, ip_address):
+        self.ip_address = ip_address
+        self.websocket = None
+        self.connected = False
+        self.running = False
+    
+    async def connect(self):
+        """Connect to ESP32 WebSocket server"""
+        try:
+            self.websocket = await websockets.connect(f"ws://{self.ip_address}/", ping_interval=None)
+            self.connected = True
+            print(f"[ESP32] Connected to {self.ip_address}")
+            return True
+        except Exception as e:
+            print(f"[ESP32] Connection failed: {e}")
+            self.connected = False
+            return False
+    
+    async def disconnect(self):
+        """Disconnect from ESP32"""
+        if self.websocket:
+            await self.websocket.close()
+        self.connected = False
+    
+    async def send_track_info(self, dx, dy, found):
+        """Send tracking information to ESP32"""
+        if not self.connected or not self.websocket:
+            return
+        
+        try:
+            message = {
+                "type": "track",
+                "dx": dx,
+                "dy": dy,
+                "found": found,
+                "timestamp": int(time.time() * 1000)
+            }
+            await self.websocket.send(json.dumps(message))
+        except Exception as e:
+            print(f"[ESP32] Send error: {e}")
+            self.connected = False
+    
+    async def send_manual(self, left, right):
+        """Send manual motor control to ESP32"""
+        if not self.connected or not self.websocket:
+            return
+        
+        try:
+            message = {
+                "type": "manual",
+                "left": left,
+                "right": right,
+                "timestamp": int(time.time() * 1000)
+            }
+            await self.websocket.send(json.dumps(message))
+        except Exception as e:
+            print(f"[ESP32] Send error: {e}")
+            self.connected = False
+    
+    async def get_status(self):
+        """Request status from ESP32"""
+        if not self.connected or not self.websocket:
+            return None
+        
+        try:
+            message = {"type": "status_req", "timestamp": int(time.time() * 1000)}
+            await self.websocket.send(json.dumps(message))
+            response = await asyncio.wait_for(self.websocket.recv(), timeout=1.0)
+            return json.loads(response)
+        except Exception as e:
+            return None
+
+
+# Global ESP32 client instance
+esp32_client = None
+
+
+def esp32_worker():
+    """Worker thread for ESP32 WebSocket communication"""
+    global esp32_client
+    
+    if not enable_esp32:
+        print("[ESP32] Disabled, skipping connection")
+        return
+    
+    print(f"[ESP32] Starting worker, connecting to {esp32_ip}...")
+    
+    # Create new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    client = ESP32Client(esp32_ip)
+    esp32_client = client
+    
+    async def run_client():
+        """Run the WebSocket client"""
+        while state.running:
+            if not client.connected:
+                connected = await client.connect()
+                if not connected:
+                    await asyncio.sleep(2)
+                    continue
+            
+            # Get current tracking info from state
+            with state.lock:
+                dx = state.esp32_dx
+                dy = state.esp32_dy
+                found = state.esp32_found
+            
+            # Send tracking info to ESP32
+            await client.send_track_info(dx, dy, found)
+            
+            # Small delay between sends
+            await asyncio.sleep(0.1)
+    
+    try:
+        loop.run_until_complete(run_client())
+    except Exception as e:
+        print(f"[ESP32] Worker error: {e}")
+    finally:
+        loop.run_until_complete(client.disconnect())
+        loop.close()
+        print("[ESP32] Worker stopped")
+        
 def motor_worker():
     print("[System] Motor Thread Started.")
     while state.running:
@@ -494,6 +639,13 @@ def vision_loop():
                 state.target_dx = int(pred_x - center_x)
                 state.target_dy = int(pred_y - center_y)
                 state.is_tracking = True
+                
+                # Update ESP32 state for car control (thread-safe)
+                if enable_esp32:
+                    with state.lock:
+                        state.esp32_dx = int(pred_x - center_x)
+                        state.esp32_dy = int(pred_y - center_y)
+                        state.esp32_found = True
 
                 # 4. DRAWING
                 is_locked = abs(state.target_dx) < CENTER_TOLERANCE and abs(state.target_dy) < CENTER_TOLERANCE
@@ -517,6 +669,10 @@ def vision_loop():
 
             else:
                 state.is_tracking = False
+                # Update ESP32 state - person not found (thread-safe)
+                if enable_esp32:
+                    with state.lock:
+                        state.esp32_found = False
                 if len(history) > 50: history.clear()
         if show_frame:
             cv2.imshow("Turret View", frame)
@@ -545,6 +701,12 @@ if __name__ == "__main__":
         servo_thread.start()
         piston_thread = threading.Thread(target=piston_worker, daemon=True)
         piston_thread.start()
+        
+        # Start ESP32 worker thread if enabled
+        if enable_esp32:
+            esp32_thread = threading.Thread(target=esp32_worker, daemon=True)
+            esp32_thread.start()
+        
         vision_loop()
     except KeyboardInterrupt:
         print("Stopped the script")
