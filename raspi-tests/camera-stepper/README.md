@@ -29,6 +29,8 @@ The conversion.py script is needed to convert a .pt file into a .onnx file. This
 1. Install requirements: `pip install -r requirements.txt`
 2. Run `conversion.py` to generate `yolo11n.onnx`
 3. Run `main.py` with camera connected
+   - Optional ESP32 control: `--esp32_ip 192.168.4.1 --esp32_port 80`
+   - ESP32 WebSocket path is `/ws` (handled by the script)
 
 > Note: If using multiple cameras, update `cv2.VideoCapture(0)` to the correct device index.
 
