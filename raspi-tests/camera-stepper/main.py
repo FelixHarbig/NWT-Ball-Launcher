@@ -7,6 +7,7 @@ import sys
 import random
 import asyncio
 from ultralytics import YOLO
+import numpy as np
 from pathlib import Path
 import json
 import contextlib
@@ -610,6 +611,139 @@ def vision_loop():
     print("[System] Vision Loop Started.")
     shown_first_frame = False
 
+    # ---------- Person Masking Helpers ----------
+    def _segment_person(roi_bgr):
+        """
+        Segment the person using GrabCut with a center foreground seed.
+        Returns a binary mask (uint8 0/255) same size as roi.
+        """
+        h, w = roi_bgr.shape[:2]
+        if h < 10 or w < 10:
+            return np.ones((h, w), dtype="uint8") * 255
+
+        mask = np.zeros((h, w), np.uint8)
+        bg_model = np.zeros((1, 65), np.float64)
+        fg_model = np.zeros((1, 65), np.float64)
+
+        # Initialize with rectangle
+        rect = (1, 1, max(2, w - 2), max(2, h - 2))
+
+        # Seed a center ellipse as sure-foreground to reduce background inclusion
+        seed_mask = np.zeros((h, w), np.uint8)
+        center = (w // 2, int(h * 0.45))
+        axes = (max(4, int(w * 0.2)), max(6, int(h * 0.3)))
+        cv2.ellipse(seed_mask, center, axes, 0, 0, 360, 255, -1)
+
+        try:
+            cv2.grabCut(roi_bgr, mask, rect, bg_model, fg_model, 2, cv2.GC_INIT_WITH_RECT)
+            # Promote seeded center to foreground
+            mask[seed_mask == 255] = cv2.GC_FGD
+            cv2.grabCut(roi_bgr, mask, None, bg_model, fg_model, 2, cv2.GC_INIT_WITH_MASK)
+            mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype("uint8")
+        except Exception:
+            mask = np.ones((h, w), dtype="uint8") * 255
+
+        # Morph cleanup
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+        # Keep only largest contour to reduce background
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            cleaned = np.zeros_like(mask)
+            cv2.drawContours(cleaned, [largest], -1, 255, -1)
+            mask = cleaned
+
+        # Slightly erode to avoid grabbing background edges
+        mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
+        return mask
+
+    def _find_largest_contour(mask):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        return max(contours, key=cv2.contourArea)
+
+    def _detect_head(contour, roi_bgr):
+        x, y, w, h = cv2.boundingRect(contour)
+        search_height = int(h * 0.5)
+        head_region = roi_bgr[y:y + search_height, x:x + w]
+        if head_region.size == 0:
+            return None
+
+        gray = cv2.cvtColor(head_region, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(gray, 50, 150)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_head = None
+        best_score = 0
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < 200:
+                continue
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * area / (perimeter ** 2)
+            if len(cnt) >= 5:
+                (_, _), (MA, ma), _ = cv2.fitEllipse(cnt)
+                aspect_ratio = min(MA, ma) / max(MA, ma)
+            else:
+                aspect_ratio = 0
+            score = circularity * aspect_ratio
+            if score > best_score and 0.4 < circularity < 1.2:
+                best_score = score
+                best_head = cnt
+
+        if best_head is not None:
+            best_head[:, 0, 0] += x
+            best_head[:, 0, 1] += y
+        return best_head
+
+    def _detect_upper_body(contour):
+        x, y, w, h = cv2.boundingRect(contour)
+        points = contour.reshape(-1, 2)
+        rows = {}
+        for px, py in points:
+            rows.setdefault(py, []).append(px)
+        widths = []
+        for py in sorted(rows.keys()):
+            xs = rows[py]
+            widths.append((py, max(xs) - min(xs)))
+        if len(widths) < 10:
+            return None
+        widths = sorted(widths)
+        top_section = widths[: len(widths) // 2]
+        shoulder_y = max(top_section, key=lambda x: x[1])[0]
+        return x, y, w, shoulder_y - y
+
+    def _mask_hit(mask, cx, cy, radius=8, min_ratio=0.55):
+        """
+        Returns True if a circle around (cx, cy) overlaps foreground mask enough.
+        """
+        h, w = mask.shape[:2]
+        x1 = max(0, cx - radius)
+        y1 = max(0, cy - radius)
+        x2 = min(w, cx + radius + 1)
+        y2 = min(h, cy + radius + 1)
+        if x2 <= x1 or y2 <= y1:
+            return False
+        roi = mask[y1:y2, x1:x2]
+        # Circular mask
+        yy, xx = np.ogrid[:roi.shape[0], :roi.shape[1]]
+        cy2 = cy - y1
+        cx2 = cx - x1
+        circle = (xx - cx2) ** 2 + (yy - cy2) ** 2 <= radius ** 2
+        total = np.count_nonzero(circle)
+        if total == 0:
+            return False
+        fg = np.count_nonzero(roi[circle] > 0)
+        return (fg / total) >= min_ratio
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -656,10 +790,28 @@ def vision_loop():
                         state.esp32_dy = int(pred_y - center_y)
                         state.esp32_found = True
 
-                # 4. DRAWING
+                # 4. DRAWING + MASKING
                 is_locked = abs(state.target_dx) < CENTER_TOLERANCE and abs(state.target_dy) < CENTER_TOLERANCE
                 color = (0, 255, 0) if is_locked else (0, 165, 255) # Green if locked, Orange if moving
                 
+                # Build a refined mask for the target person ROI
+                roi_x1 = max(0, x1)
+                roi_y1 = max(0, y1)
+                roi_x2 = min(w, x2)
+                roi_y2 = min(h, y2)
+                person_mask = None
+                contour = None
+                head = None
+                upper_body = None
+                if roi_x2 > roi_x1 and roi_y2 > roi_y1:
+                    roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+                    if roi.size > 0:
+                        person_mask = _segment_person(roi)
+                        contour = _find_largest_contour(person_mask)
+                        if contour is not None and show_frame:
+                            head = _detect_head(contour, roi)
+                            upper_body = _detect_upper_body(contour)
+
                 # Bounding Box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 # Prediction Dot
@@ -670,7 +822,24 @@ def vision_loop():
                 # Line from center to target
                 cv2.line(frame, (center_x, center_y), (int(pred_x), int(pred_y)), color, 1)
 
-                if is_locked:
+                # Optional: draw refined contour to visualize masking
+                if show_frame and contour is not None:
+                    cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [contour], -1, (0, 255, 0), 1)
+                if show_frame and head is not None:
+                    cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [head], -1, (255, 0, 0), 1)
+                if show_frame and upper_body is not None:
+                    ux, uy, uw, uh = upper_body
+                    cv2.rectangle(frame[roi_y1:roi_y2, roi_x1:roi_x2], (ux, uy), (ux + uw, uy + uh), (0, 165, 255), 1)
+
+                # Fire only if center is on-person, not just inside bounding box
+                on_person = False
+                if person_mask is not None:
+                    if roi_x1 <= center_x < roi_x2 and roi_y1 <= center_y < roi_y2:
+                        local_x = center_x - roi_x1
+                        local_y = center_y - roi_y1
+                        on_person = _mask_hit(person_mask, local_x, local_y, radius=10, min_ratio=0.6)
+
+                if on_person:
                     print(f"[DEBUG] Target Met: Pos({int(tx)}, {int(ty)})")
                     # Only fire if not already firing and piston is not retracting
                     if not state.is_firing and not state.piston_retracting:
