@@ -13,7 +13,8 @@
  */
 
 #include <WiFi.h>
-#include <WebSocketServer.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include "config.h"
 
@@ -21,9 +22,9 @@
 // GLOBAL VARIABLES
 // ============================================================================
 
-// WebSocket server
-WebSocketServer webSocketServer;
-WiFiClient wsClient;
+// Web server + WebSocket
+AsyncWebServer server(WEBSOCKET_PORT);
+AsyncWebSocket ws("/ws");
 
 // Motor state
 int8_t leftMotorSpeed = 0;
@@ -452,7 +453,7 @@ void updateState() {
  * @brief Send status to Raspberry Pi
  */
 void sendStatus() {
-    if (!wsClient.connected()) return;
+    if (ws.count() == 0) return;
     
     StaticJsonDocument<256> doc;
     doc["type"] = "status";
@@ -485,7 +486,7 @@ void sendStatus() {
     
     String jsonStr;
     serializeJson(doc, jsonStr);
-    wsClient.println(jsonStr);
+    ws.textAll(jsonStr);
 }
 
 /**
@@ -519,6 +520,41 @@ void processWebSocketMessage(String message) {
     }
 }
 
+/**
+ * @brief WebSocket event handler
+ */
+void handleWebSocketEvent(AsyncWebSocket * server, AsyncWebSocketClient * client,
+                          AwsEventType type, void * arg, uint8_t * data, size_t len) {
+    switch (type) {
+        case WS_EVT_CONNECT:
+            Serial.printf("WebSocket client connected: %u\n", client->id());
+            break;
+        case WS_EVT_DISCONNECT:
+            Serial.printf("WebSocket client disconnected: %u\n", client->id());
+            currentMode = MODE_STOPPED;
+            stopMotors();
+            break;
+        case WS_EVT_DATA: {
+            AwsFrameInfo * info = (AwsFrameInfo *)arg;
+            if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+                String message;
+                message.reserve(len);
+                for (size_t i = 0; i < len; i++) {
+                    message += (char)data[i];
+                }
+                if (message.length() > 0) {
+                    Serial.print("Received: ");
+                    Serial.println(message);
+                    processWebSocketMessage(message);
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 // ============================================================================
 // WIFI & WEBSOCKET SETUP
 // ============================================================================
@@ -544,7 +580,9 @@ void initWiFi() {
  * @brief Initialize WebSocket server
  */
 void initWebSocket() {
-    webSocketServer.begin();
+    ws.onEvent(handleWebSocketEvent);
+    server.addHandler(&ws);
+    server.begin();
     Serial.println("WebSocket server started");
 }
 
@@ -624,29 +662,8 @@ void setup() {
 }
 
 void loop() {
-    // Check for new WebSocket clients
-    if (webSocketServer.getClient()) {
-        if (!wsClient.connected()) {
-            wsClient = webSocketServer.getClient();
-            Serial.println("Client connected!");
-        }
-    }
-    
-    // Handle WebSocket communication
-    if (wsClient.connected()) {
-        // Check for incoming data
-        if (wsClient.available()) {
-            String message = wsClient.readStringUntil('\n');
-            if (message.length() > 0) {
-                Serial.print("Received: ");
-                Serial.println(message);
-                processWebSocketMessage(message);
-            }
-        }
-    } else {
-        // Client disconnected - stop motors
-        currentMode = MODE_STOPPED;
-    }
+    // Handle WebSocket cleanup
+    ws.cleanupClients();
     
     // Update state machine
     updateState();

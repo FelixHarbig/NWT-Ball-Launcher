@@ -29,6 +29,7 @@ parser.add_argument("--demo", action="store_true", help="Run in simulation mode 
 parser.add_argument("--no_view", action="store_true", help="Run headlessly without showing the CV2 window")
 parser.add_argument("--calibrate", action="store_true", help="Run max step calibration")
 parser.add_argument("--esp32_ip", type=str, default="192.168.4.1", help="ESP32 IP address for WebSocket connection")
+parser.add_argument("--esp32_port", type=int, default=80, help="ESP32 WebSocket port")
 parser.add_argument("--no_esp32", action="store_true", help="Disable ESP32 car control")
 args=parser.parse_args()
 
@@ -36,9 +37,10 @@ demo_mode = args.demo
 show_frame = not args.no_view 
 calibration_mode = args.calibrate
 esp32_ip = args.esp32_ip
+esp32_port = args.esp32_port
 enable_esp32 = not args.no_esp32 and WEBSOCKETS_AVAILABLE
 
-print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip})")
+print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
 
 if not demo_mode:
     import RPi.GPIO as GPIO
@@ -337,8 +339,9 @@ def calibrate_steps():
 class ESP32Client:
     """WebSocket client for ESP32 car control"""
     
-    def __init__(self, ip_address):
+    def __init__(self, ip_address, port):
         self.ip_address = ip_address
+        self.port = port
         self.websocket = None
         self.connected = False
         self.running = False
@@ -346,9 +349,9 @@ class ESP32Client:
     async def connect(self):
         """Connect to ESP32 WebSocket server"""
         try:
-            self.websocket = await websockets.connect(f"ws://{self.ip_address}/", ping_interval=None)
+            self.websocket = await websockets.connect(f"ws://{self.ip_address}:{self.port}/ws", ping_interval=None)
             self.connected = True
-            print(f"[ESP32] Connected to {self.ip_address}")
+            print(f"[ESP32] Connected to {self.ip_address}:{self.port}")
             return True
         except Exception as e:
             print(f"[ESP32] Connection failed: {e}")
@@ -422,13 +425,13 @@ def esp32_worker():
         print("[ESP32] Disabled, skipping connection")
         return
     
-    print(f"[ESP32] Starting worker, connecting to {esp32_ip}...")
+    print(f"[ESP32] Starting worker, connecting to {esp32_ip}:{esp32_port}...")
     
     # Create new event loop for this thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    client = ESP32Client(esp32_ip)
+    client = ESP32Client(esp32_ip, esp32_port)
     esp32_client = client
     
     async def run_client():

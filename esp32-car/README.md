@@ -45,7 +45,8 @@ This project implements an ESP32 car control system that:
 1. Arduino IDE with ESP32 board support
 2. Required libraries:
    - WiFi (built-in)
-   - WebSocketServer (from library manager)
+   - ESPAsyncWebServer (from library manager, ESP32Async)
+   - AsyncTCP (from library manager)
    - ArduinoJson (from library manager)
 
 ### Upload
@@ -62,6 +63,7 @@ After upload, the ESP32 creates an Access Point:
 - **Password**: 12345678
 - **IP Address**: 192.168.4.1
 - **WebSocket Port**: 80
+- **WebSocket Path**: /ws
 
 ## Communication Protocol
 
