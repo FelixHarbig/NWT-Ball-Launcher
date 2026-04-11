@@ -29,6 +29,7 @@ parser=argparse.ArgumentParser()
 parser.add_argument("--demo", action="store_true", help="Run in simulation mode with dummy GPIO")
 parser.add_argument("--no_view", action="store_true", help="Run headlessly without showing the CV2 window")
 parser.add_argument("--perf_view", action="store_true", help="Show FPS/delay only (no video/boxes)")
+parser.add_argument("--no_contours", action="store_true", help="Disable contour/mask processing for speed")
 parser.add_argument("--calibrate", action="store_true", help="Run max step calibration")
 parser.add_argument("--esp32_ip", type=str, default="192.168.4.1", help="ESP32 IP address for WebSocket connection")
 parser.add_argument("--esp32_port", type=int, default=80, help="ESP32 WebSocket port")
@@ -38,12 +39,13 @@ args=parser.parse_args()
 demo_mode = args.demo
 show_frame = not args.no_view 
 perf_view = args.perf_view
+disable_contours = args.no_contours
 calibration_mode = args.calibrate
 esp32_ip = args.esp32_ip
 esp32_port = args.esp32_port
 enable_esp32 = not args.no_esp32 and WEBSOCKETS_AVAILABLE
 
-print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
+print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Contours: {not disable_contours}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
 
 if not demo_mode:
     import RPi.GPIO as GPIO
@@ -828,7 +830,7 @@ def vision_loop():
                 contour = None
                 head = None
                 upper_body = None
-                if roi_x2 > roi_x1 and roi_y2 > roi_y1:
+                if roi_x2 > roi_x1 and roi_y2 > roi_y1 and not disable_contours:
                     roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
                     if roi.size > 0:
                         person_mask = _segment_person(roi)
