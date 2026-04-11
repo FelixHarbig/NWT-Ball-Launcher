@@ -828,7 +828,7 @@ def vision_loop():
                 contour = None
                 head = None
                 upper_body = None
-                if roi_x2 > roi_x1 and roi_y2 > roi_y1 and not perf_view:
+                if roi_x2 > roi_x1 and roi_y2 > roi_y1:
                     roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
                     if roi.size > 0:
                         person_mask = _segment_person(roi)
