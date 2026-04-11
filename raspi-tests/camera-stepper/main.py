@@ -600,9 +600,7 @@ def get_target_person(boxes, frame_center, current_track_id):
     return closest_box, target_id
 
 def vision_loop():
-    model = None
-    if not perf_view:
-        model = YOLO(MODEL_PATH, task="detect")
+    model = YOLO(MODEL_PATH, task="detect")
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -767,39 +765,18 @@ def vision_loop():
         center_x, center_y = w // 2, h // 2
         frame_counter += 1
 
-        if perf_view:
-            # Blank display with FPS/delay + frame counter only
-            display = frame.copy()
-            display[:] = (0, 0, 0)
-            if fps_ema is not None:
-                overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
-                cv2.putText(display, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            cv2.putText(display, f"Frames: {frame_counter}", (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            if show_frame:
-                try:
-                    cv2.imshow("Turret View", display)
-                    if not shown_first_frame:
-                        print("[Video] OpenCV window created.")
-                        shown_first_frame = True
-                except cv2.error as e:
-                    print(f"[Error] OpenCV display failed: {e}")
-                    break
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                state.running = False
-                break
-            continue
-
         results = model.track(frame, persist=True, imgsz=640, classes=[0], verbose=False)
 
-        # DRAW STATIC CROSSHAIR
-        cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (255, 255, 255), 2)
-        cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (255, 255, 255), 2)
-        cv2.circle(frame, (center_x, center_y), CENTER_TOLERANCE, (255, 255, 255), 1)
+        if not perf_view:
+            # DRAW STATIC CROSSHAIR
+            cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (255, 255, 255), 2)
+            cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (255, 255, 255), 2)
+            cv2.circle(frame, (center_x, center_y), CENTER_TOLERANCE, (255, 255, 255), 1)
 
-        # FPS / frame time overlay (top-left)
-        if fps_ema is not None:
-            overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
-            cv2.putText(frame, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            # FPS / frame time overlay (top-left)
+            if fps_ema is not None:
+                overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
+                cv2.putText(frame, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         target_box = None
         if results[0].boxes:
@@ -843,7 +820,7 @@ def vision_loop():
                 contour = None
                 head = None
                 upper_body = None
-                if roi_x2 > roi_x1 and roi_y2 > roi_y1:
+                if roi_x2 > roi_x1 and roi_y2 > roi_y1 and not perf_view:
                     roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
                     if roi.size > 0:
                         person_mask = _segment_person(roi)
@@ -851,23 +828,24 @@ def vision_loop():
                         if contour is not None and show_frame:
                             head = _detect_head(contour, roi)
                             upper_body = _detect_upper_body(contour)
-
-                # Bounding Box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                # Prediction Dot
-                cv2.circle(frame, (int(pred_x), int(pred_y)), 5, (0, 0, 255), -1)
-                # Label
-                label = f"ID:{tracked_id} {' LOCKED' if is_locked else ' TRACKING'}"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                # Line from center to target
-                cv2.line(frame, (center_x, center_y), (int(pred_x), int(pred_y)), color, 1)
-
+                
+                if not perf_view:
+                    # Bounding Box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    # Prediction Dot
+                    cv2.circle(frame, (int(pred_x), int(pred_y)), 5, (0, 0, 255), -1)
+                    # Label
+                    label = f"ID:{tracked_id} {' LOCKED' if is_locked else ' TRACKING'}"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    # Line from center to target
+                    cv2.line(frame, (center_x, center_y), (int(pred_x), int(pred_y)), color, 1)
+                
                 # Optional: draw refined contour to visualize masking
-                if show_frame and contour is not None:
+                if not perf_view and show_frame and contour is not None:
                     cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [contour], -1, (0, 255, 0), 1)
-                if show_frame and head is not None:
+                if not perf_view and show_frame and head is not None:
                     cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [head], -1, (255, 0, 0), 1)
-                if show_frame and upper_body is not None:
+                if not perf_view and show_frame and upper_body is not None:
                     ux, uy, uw, uh = upper_body
                     cv2.rectangle(frame[roi_y1:roi_y2, roi_x1:roi_x2], (ux, uy), (ux + uw, uy + uh), (0, 165, 255), 1)
 
@@ -893,7 +871,16 @@ def vision_loop():
                 if len(history) > 50: history.clear()
         if show_frame:
             try:
-                cv2.imshow("Turret View", frame)
+                if perf_view:
+                    display = frame.copy()
+                    display[:] = (0, 0, 0)
+                    if fps_ema is not None:
+                        overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
+                        cv2.putText(display, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.putText(display, f"Frames: {frame_counter}", (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.imshow("Turret View", display)
+                else:
+                    cv2.imshow("Turret View", frame)
                 if not shown_first_frame:
                     print("[Video] OpenCV window created.")
                     shown_first_frame = True
