@@ -785,10 +785,9 @@ def vision_loop():
                 
                 # Update ESP32 state for car control (thread-safe)
                 if enable_esp32:
-                    with state.lock:
-                        state.esp32_dx = int(pred_x - center_x)
-                        state.esp32_dy = int(pred_y - center_y)
-                        state.esp32_found = True
+                    state.esp32_dx = int(pred_x - center_x)
+                    state.esp32_dy = int(pred_y - center_y)
+                    state.esp32_found = True
 
                 # 4. DRAWING + MASKING
                 is_locked = abs(state.target_dx) < CENTER_TOLERANCE and abs(state.target_dy) < CENTER_TOLERANCE
@@ -849,8 +848,7 @@ def vision_loop():
                 state.is_tracking = False
                 # Update ESP32 state - person not found (thread-safe)
                 if enable_esp32:
-                    with state.lock:
-                        state.esp32_found = False
+                    state.esp32_found = False
                 if len(history) > 50: history.clear()
         if show_frame:
             try:
