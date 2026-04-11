@@ -30,6 +30,10 @@ AsyncWebSocket ws("/ws");
 int8_t leftMotorSpeed = 0;
 int8_t rightMotorSpeed = 0;
 
+// PWM channels (set at init based on ESP32 core version)
+int leftPwmChannel = 0;
+int rightPwmChannel = 1;
+
 // Ultrasonic sensor distances (in cm)
 int obstacleMiddle = 0;
 int obstacleLeft = 0;
@@ -79,10 +83,19 @@ void initMotors() {
     pinMode(RIGHT_MOTOR_PWM, OUTPUT);
     
     // Configure PWM
-    ledcSetup(0, PWM_FREQUENCY, PWM_RESOLUTION);
-    ledcSetup(1, PWM_FREQUENCY, PWM_RESOLUTION);
-    ledcAttachPin(LEFT_MOTOR_PWM, 0);
-    ledcAttachPin(RIGHT_MOTOR_PWM, 1);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+    // ESP32 Arduino core v3.x uses ledcAttach(pin, freq, resolution)
+    leftPwmChannel = ledcAttach(LEFT_MOTOR_PWM, PWM_FREQUENCY, PWM_RESOLUTION);
+    rightPwmChannel = ledcAttach(RIGHT_MOTOR_PWM, PWM_FREQUENCY, PWM_RESOLUTION);
+#else
+    // ESP32 Arduino core v2.x uses ledcSetup/ledcAttachPin
+    leftPwmChannel = 0;
+    rightPwmChannel = 1;
+    ledcSetup(leftPwmChannel, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcSetup(rightPwmChannel, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(LEFT_MOTOR_PWM, leftPwmChannel);
+    ledcAttachPin(RIGHT_MOTOR_PWM, rightPwmChannel);
+#endif
     
     // Stop motors initially
     stopMotors();
@@ -98,17 +111,17 @@ void setLeftMotor(int8_t speed) {
         // Forward
         digitalWrite(LEFT_MOTOR_IN1, HIGH);
         digitalWrite(LEFT_MOTOR_IN2, LOW);
-        ledcWrite(0, map(speed, 0, 100, 0, 255));
+        ledcWrite(leftPwmChannel, map(speed, 0, 100, 0, 255));
     } else if (speed < 0) {
         // Backward
         digitalWrite(LEFT_MOTOR_IN1, LOW);
         digitalWrite(LEFT_MOTOR_IN2, HIGH);
-        ledcWrite(0, map(-speed, 0, 100, 0, 255));
+        ledcWrite(leftPwmChannel, map(-speed, 0, 100, 0, 255));
     } else {
         // Stop
         digitalWrite(LEFT_MOTOR_IN1, LOW);
         digitalWrite(LEFT_MOTOR_IN2, LOW);
-        ledcWrite(0, 0);
+        ledcWrite(leftPwmChannel, 0);
     }
 }
 
@@ -122,17 +135,17 @@ void setRightMotor(int8_t speed) {
         // Forward
         digitalWrite(RIGHT_MOTOR_IN1, HIGH);
         digitalWrite(RIGHT_MOTOR_IN2, LOW);
-        ledcWrite(1, map(speed, 0, 100, 0, 255));
+        ledcWrite(rightPwmChannel, map(speed, 0, 100, 0, 255));
     } else if (speed < 0) {
         // Backward
         digitalWrite(RIGHT_MOTOR_IN1, LOW);
         digitalWrite(RIGHT_MOTOR_IN2, HIGH);
-        ledcWrite(1, map(-speed, 0, 100, 0, 255));
+        ledcWrite(rightPwmChannel, map(-speed, 0, 100, 0, 255));
     } else {
         // Stop
         digitalWrite(RIGHT_MOTOR_IN1, LOW);
         digitalWrite(RIGHT_MOTOR_IN2, LOW);
-        ledcWrite(1, 0);
+        ledcWrite(rightPwmChannel, 0);
     }
 }
 
