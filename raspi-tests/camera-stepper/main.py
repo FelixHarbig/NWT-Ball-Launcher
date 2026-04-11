@@ -170,6 +170,11 @@ class TurretState:
         self.esp32_dy = 0
         self.esp32_found = False
 
+        # Perf view target (screen coordinates)
+        self.perf_target_x = 0
+        self.perf_target_y = 0
+        self.perf_has_target = False
+
 state = TurretState()
 
 # Hall effect sensor https://www.raspberrypi-spy.co.uk/2015/09/how-to-use-a-hall-effect-sensor-with-the-raspberry-pi/
@@ -800,6 +805,9 @@ def vision_loop():
                 state.target_dx = int(pred_x - center_x)
                 state.target_dy = int(pred_y - center_y)
                 state.is_tracking = True
+                state.perf_target_x = int(pred_x)
+                state.perf_target_y = int(pred_y)
+                state.perf_has_target = True
                 
                 # Update ESP32 state for car control (thread-safe)
                 if enable_esp32:
@@ -865,6 +873,7 @@ def vision_loop():
 
             else:
                 state.is_tracking = False
+                state.perf_has_target = False
                 # Update ESP32 state - person not found (thread-safe)
                 if enable_esp32:
                     state.esp32_found = False
@@ -878,6 +887,12 @@ def vision_loop():
                         overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
                         cv2.putText(display, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                     cv2.putText(display, f"Frames: {frame_counter}", (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    with state.lock:
+                        has_t = state.perf_has_target
+                        tx = state.perf_target_x
+                        ty = state.perf_target_y
+                    if has_t:
+                        cv2.circle(display, (tx, ty), 6, (0, 255, 255), -1)
                     cv2.imshow("Turret View", display)
                 else:
                     cv2.imshow("Turret View", frame)
