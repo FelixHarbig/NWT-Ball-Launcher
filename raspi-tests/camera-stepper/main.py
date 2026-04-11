@@ -601,14 +601,20 @@ def vision_loop():
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    if not cap.isOpened():
+        print("[Error] Camera failed to open (cv2.VideoCapture(0)).")
+        return
 
     tracked_id = None
     history = {}
     print("[System] Vision Loop Started.")
+    shown_first_frame = False
 
     while True:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            print("[Error] Failed to read camera frame.")
+            break
 
         h, w, _ = frame.shape
         center_x, center_y = w // 2, h // 2
@@ -678,7 +684,14 @@ def vision_loop():
                         state.esp32_found = False
                 if len(history) > 50: history.clear()
         if show_frame:
-            cv2.imshow("Turret View", frame)
+            try:
+                cv2.imshow("Turret View", frame)
+                if not shown_first_frame:
+                    print("[Video] OpenCV window created.")
+                    shown_first_frame = True
+            except cv2.error as e:
+                print(f"[Error] OpenCV display failed: {e}")
+                break
         if cv2.waitKey(1) & 0xFF == ord('q'):
             state.running = False
             break
