@@ -610,6 +610,8 @@ def vision_loop():
     history = {}
     print("[System] Vision Loop Started.")
     shown_first_frame = False
+    last_frame_time = time.time()
+    fps_ema = None
 
     # ---------- Person Masking Helpers ----------
     def _segment_person(roi_bgr):
@@ -750,6 +752,12 @@ def vision_loop():
             print("[Error] Failed to read camera frame.")
             break
 
+        now = time.time()
+        dt = now - last_frame_time
+        last_frame_time = now
+        if dt > 0:
+            instant_fps = 1.0 / dt
+            fps_ema = instant_fps if fps_ema is None else (0.9 * fps_ema + 0.1 * instant_fps)
         h, w, _ = frame.shape
         center_x, center_y = w // 2, h // 2
 
@@ -759,6 +767,11 @@ def vision_loop():
         cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (255, 255, 255), 2)
         cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (255, 255, 255), 2)
         cv2.circle(frame, (center_x, center_y), CENTER_TOLERANCE, (255, 255, 255), 1)
+
+        # FPS / frame time overlay (top-left)
+        if fps_ema is not None:
+            overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
+            cv2.putText(frame, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         target_box = None
         if results[0].boxes:
