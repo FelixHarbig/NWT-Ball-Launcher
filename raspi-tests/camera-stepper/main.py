@@ -678,14 +678,11 @@ def vision_loop():
                         local_y = center_y - roi_y1
                         on_person = _mask_hit(person_mask, local_x, local_y, radius=10, min_ratio=0.6)
 
-                if is_locked and on_person:
+                if on_person:
                     print(f"[DEBUG] Target Met: Pos({int(tx)}, {int(ty)})")
                     # Only fire if not already firing and piston is not retracting
                     if not state.is_firing and not state.piston_retracting:
                         state.is_firing = True
-                elif is_locked and not on_person:
-                    # Locked on bbox, but not on person pixels
-                    pass
 
             else:
                 state.is_tracking = False
