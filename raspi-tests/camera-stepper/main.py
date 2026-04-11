@@ -28,6 +28,7 @@ except ImportError:
 parser=argparse.ArgumentParser()
 parser.add_argument("--demo", action="store_true", help="Run in simulation mode with dummy GPIO")
 parser.add_argument("--no_view", action="store_true", help="Run headlessly without showing the CV2 window")
+parser.add_argument("--perf_view", action="store_true", help="Show FPS/delay only (no video/boxes)")
 parser.add_argument("--calibrate", action="store_true", help="Run max step calibration")
 parser.add_argument("--esp32_ip", type=str, default="192.168.4.1", help="ESP32 IP address for WebSocket connection")
 parser.add_argument("--esp32_port", type=int, default=80, help="ESP32 WebSocket port")
@@ -36,12 +37,13 @@ args=parser.parse_args()
 
 demo_mode = args.demo
 show_frame = not args.no_view 
+perf_view = args.perf_view
 calibration_mode = args.calibrate
 esp32_ip = args.esp32_ip
 esp32_port = args.esp32_port
 enable_esp32 = not args.no_esp32 and WEBSOCKETS_AVAILABLE
 
-print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
+print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
 
 if not demo_mode:
     import RPi.GPIO as GPIO
@@ -598,7 +600,9 @@ def get_target_person(boxes, frame_center, current_track_id):
     return closest_box, target_id
 
 def vision_loop():
-    model = YOLO(MODEL_PATH, task="detect")
+    model = None
+    if not perf_view:
+        model = YOLO(MODEL_PATH, task="detect")
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -612,6 +616,7 @@ def vision_loop():
     shown_first_frame = False
     last_frame_time = time.time()
     fps_ema = None
+    frame_counter = 0
 
     # ---------- Person Masking Helpers ----------
     def _segment_person(roi_bgr):
@@ -760,6 +765,29 @@ def vision_loop():
             fps_ema = instant_fps if fps_ema is None else (0.9 * fps_ema + 0.1 * instant_fps)
         h, w, _ = frame.shape
         center_x, center_y = w // 2, h // 2
+        frame_counter += 1
+
+        if perf_view:
+            # Blank display with FPS/delay + frame counter only
+            display = frame.copy()
+            display[:] = (0, 0, 0)
+            if fps_ema is not None:
+                overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
+                cv2.putText(display, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(display, f"Frames: {frame_counter}", (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            if show_frame:
+                try:
+                    cv2.imshow("Turret View", display)
+                    if not shown_first_frame:
+                        print("[Video] OpenCV window created.")
+                        shown_first_frame = True
+                except cv2.error as e:
+                    print(f"[Error] OpenCV display failed: {e}")
+                    break
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                state.running = False
+                break
+            continue
 
         results = model.track(frame, persist=True, imgsz=640, classes=[0], verbose=False)
 
