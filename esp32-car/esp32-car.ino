@@ -16,6 +16,7 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <AccelStepper.h>
 #include "config.h"
 
 // ============================================================================
@@ -30,9 +31,9 @@ AsyncWebSocket ws("/ws");
 int8_t leftMotorSpeed = 0;
 int8_t rightMotorSpeed = 0;
 
-// PWM channels (set at init based on ESP32 core version)
-int leftPwmChannel = 0;
-int rightPwmChannel = 1;
+// AccelStepper objects for left and right motors
+AccelStepper stepperLeft(MOTOR_INTERFACE_TYPE, LEFT_MOTOR_STEP, LEFT_MOTOR_DIR);
+AccelStepper stepperRight(MOTOR_INTERFACE_TYPE, RIGHT_MOTOR_STEP, RIGHT_MOTOR_DIR);
 
 // Ultrasonic sensor distances (in cm)
 int obstacleMiddle = 0;
@@ -69,35 +70,15 @@ bool ledState = false;
 // ============================================================================
 
 /**
- * @brief Initialize motor pins
+ * @brief Initialize stepper motors
  */
 void initMotors() {
-    // Left motor
-    pinMode(LEFT_MOTOR_IN1, OUTPUT);
-    pinMode(LEFT_MOTOR_IN2, OUTPUT);
-    pinMode(LEFT_MOTOR_PWM, OUTPUT);
+    stepperLeft.setMaxSpeed(MAX_STEP_SPEED);
+    stepperLeft.setAcceleration(STEP_ACCELERATION);
     
-    // Right motor
-    pinMode(RIGHT_MOTOR_IN1, OUTPUT);
-    pinMode(RIGHT_MOTOR_IN2, OUTPUT);
-    pinMode(RIGHT_MOTOR_PWM, OUTPUT);
+    stepperRight.setMaxSpeed(MAX_STEP_SPEED);
+    stepperRight.setAcceleration(STEP_ACCELERATION);
     
-    // Configure PWM
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
-    // ESP32 Arduino core v3.x uses ledcAttach(pin, freq, resolution)
-    leftPwmChannel = ledcAttach(LEFT_MOTOR_PWM, PWM_FREQUENCY, PWM_RESOLUTION);
-    rightPwmChannel = ledcAttach(RIGHT_MOTOR_PWM, PWM_FREQUENCY, PWM_RESOLUTION);
-#else
-    // ESP32 Arduino core v2.x uses ledcSetup/ledcAttachPin
-    leftPwmChannel = 0;
-    rightPwmChannel = 1;
-    ledcSetup(leftPwmChannel, PWM_FREQUENCY, PWM_RESOLUTION);
-    ledcSetup(rightPwmChannel, PWM_FREQUENCY, PWM_RESOLUTION);
-    ledcAttachPin(LEFT_MOTOR_PWM, leftPwmChannel);
-    ledcAttachPin(RIGHT_MOTOR_PWM, rightPwmChannel);
-#endif
-    
-    // Stop motors initially
     stopMotors();
 }
 
@@ -106,23 +87,8 @@ void initMotors() {
  */
 void setLeftMotor(int8_t speed) {
     speed = constrain(speed, MIN_MOTOR_SPEED, MAX_MOTOR_SPEED);
-    
-    if (speed > 0) {
-        // Forward
-        digitalWrite(LEFT_MOTOR_IN1, HIGH);
-        digitalWrite(LEFT_MOTOR_IN2, LOW);
-        ledcWrite(leftPwmChannel, map(speed, 0, 100, 0, 255));
-    } else if (speed < 0) {
-        // Backward
-        digitalWrite(LEFT_MOTOR_IN1, LOW);
-        digitalWrite(LEFT_MOTOR_IN2, HIGH);
-        ledcWrite(leftPwmChannel, map(-speed, 0, 100, 0, 255));
-    } else {
-        // Stop
-        digitalWrite(LEFT_MOTOR_IN1, LOW);
-        digitalWrite(LEFT_MOTOR_IN2, LOW);
-        ledcWrite(leftPwmChannel, 0);
-    }
+    int32_t stepSpeed = map(speed, -100, 100, -MAX_STEP_SPEED, MAX_STEP_SPEED);
+    stepperLeft.setSpeed(stepSpeed);
 }
 
 /**
@@ -130,23 +96,8 @@ void setLeftMotor(int8_t speed) {
  */
 void setRightMotor(int8_t speed) {
     speed = constrain(speed, MIN_MOTOR_SPEED, MAX_MOTOR_SPEED);
-    
-    if (speed > 0) {
-        // Forward
-        digitalWrite(RIGHT_MOTOR_IN1, HIGH);
-        digitalWrite(RIGHT_MOTOR_IN2, LOW);
-        ledcWrite(rightPwmChannel, map(speed, 0, 100, 0, 255));
-    } else if (speed < 0) {
-        // Backward
-        digitalWrite(RIGHT_MOTOR_IN1, LOW);
-        digitalWrite(RIGHT_MOTOR_IN2, HIGH);
-        ledcWrite(rightPwmChannel, map(-speed, 0, 100, 0, 255));
-    } else {
-        // Stop
-        digitalWrite(RIGHT_MOTOR_IN1, LOW);
-        digitalWrite(RIGHT_MOTOR_IN2, LOW);
-        ledcWrite(rightPwmChannel, 0);
-    }
+    int32_t stepSpeed = map(speed, -100, 100, -MAX_STEP_SPEED, MAX_STEP_SPEED);
+    stepperRight.setSpeed(stepSpeed);
 }
 
 /**
@@ -315,7 +266,7 @@ void performObstacleAvoidance() {
 /**
  * @brief Process track command from Raspberry Pi
  */
-void processTrackCommand(int dx, int dy, bool found) {
+void processTrackCommand(int dx, int dy, bool found, bool hold) {
     lastCommandTime = millis();
     commandReceived = true;
     
@@ -326,6 +277,12 @@ void processTrackCommand(int dx, int dy, bool found) {
     }
     
     currentMode = MODE_TRACKING;
+    
+    // If hold is set, turret is handling tracking, car stands by
+    if (hold) {
+        stopMotors();
+        return;
+    }
     
     // Check obstacle first
     if (checkObstacles()) {
@@ -521,7 +478,8 @@ void processWebSocketMessage(String message) {
         int dx = doc["dx"].as<int>();
         int dy = doc["dy"].as<int>();
         bool found = doc["found"].as<bool>();
-        processTrackCommand(dx, dy, found);
+        bool hold = doc["hold"].as<bool>();
+        processTrackCommand(dx, dy, found, hold);
     } 
     else if (type == "manual") {
         int8_t left = doc["left"].as<int8_t>();
@@ -680,6 +638,10 @@ void loop() {
     
     // Update state machine
     updateState();
+    
+    // Run stepper motors (must be called as often as possible)
+    stepperLeft.runSpeed();
+    stepperRight.runSpeed();
     
     // Update status LED
     updateStatusLed();

@@ -28,6 +28,8 @@ except ImportError:
 parser=argparse.ArgumentParser()
 parser.add_argument("--demo", action="store_true", help="Run in simulation mode with dummy GPIO")
 parser.add_argument("--no_view", action="store_true", help="Run headlessly without showing the CV2 window")
+parser.add_argument("--perf_view", action="store_true", help="Show FPS/delay only (no video/boxes)")
+parser.add_argument("--no_contours", action="store_true", help="Disable contour/mask processing for speed")
 parser.add_argument("--calibrate", action="store_true", help="Run max step calibration")
 parser.add_argument("--esp32_ip", type=str, default="192.168.4.1", help="ESP32 IP address for WebSocket connection")
 parser.add_argument("--esp32_port", type=int, default=80, help="ESP32 WebSocket port")
@@ -36,12 +38,14 @@ args=parser.parse_args()
 
 demo_mode = args.demo
 show_frame = not args.no_view 
+perf_view = args.perf_view
+disable_contours = args.no_contours
 calibration_mode = args.calibrate
 esp32_ip = args.esp32_ip
 esp32_port = args.esp32_port
 enable_esp32 = not args.no_esp32 and WEBSOCKETS_AVAILABLE
 
-print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
+print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Contours: {not disable_contours}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
 
 if not demo_mode:
     import RPi.GPIO as GPIO
@@ -167,6 +171,11 @@ class TurretState:
         self.esp32_dx = 0
         self.esp32_dy = 0
         self.esp32_found = False
+
+        # Perf view target (screen coordinates)
+        self.perf_target_x = 0
+        self.perf_target_y = 0
+        self.perf_has_target = False
 
 state = TurretState()
 
@@ -365,7 +374,7 @@ class ESP32Client:
             await self.websocket.close()
         self.connected = False
     
-    async def send_track_info(self, dx, dy, found):
+    async def send_track_info(self, dx, dy, found, hold=False):
         """Send tracking information to ESP32"""
         if not self.connected or not self.websocket:
             return
@@ -376,6 +385,7 @@ class ESP32Client:
                 "dx": dx,
                 "dy": dy,
                 "found": found,
+                "hold": hold,
                 "timestamp": int(time.time() * 1000)
             }
             await self.websocket.send(json.dumps(message))
@@ -444,14 +454,39 @@ def esp32_worker():
                     await asyncio.sleep(2)
                     continue
             
-            # Get current tracking info from state
+            # Get current tracking info and turret state
             with state.lock:
-                dx = state.esp32_dx
-                dy = state.esp32_dy
+                raw_dx = state.esp32_dx
+                raw_dy = state.esp32_dy
                 found = state.esp32_found
+                tracking = state.is_tracking
+                pos_x = state.position_x
+                pos_y = state.position_y
+            
+            if tracking:
+                # Check if turret is at a limit and target is still beyond it
+                at_x_limit = (pos_x >= MAX_STEPS_X and raw_dx > 0) or (pos_x <= 0 and raw_dx < 0)
+                at_y_limit = (pos_y >= MAX_STEPS_Y and raw_dy > 0) or (pos_y <= 0 and raw_dy < 0)
+                
+                if at_x_limit or at_y_limit:
+                    # Turret can't reach target, move car to help
+                    dx = raw_dx
+                    dy = raw_dy
+                    hold = False
+                else:
+                    # Turret is handling tracking, car should stand by
+                    dx = 0
+                    dy = 0
+                    hold = True
+                send_found = True
+            else:
+                dx = 0
+                dy = 0
+                send_found = False
+                hold = False
             
             # Send tracking info to ESP32
-            await client.send_track_info(dx, dy, found)
+            await client.send_track_info(dx, dy, send_found, hold)
             
             # Small delay between sends
             await asyncio.sleep(0.1)
@@ -610,6 +645,9 @@ def vision_loop():
     history = {}
     print("[System] Vision Loop Started.")
     shown_first_frame = False
+    last_frame_time = time.time()
+    fps_ema = None
+    frame_counter = 0
 
     # ---------- Person Masking Helpers ----------
     def _segment_person(roi_bgr):
@@ -750,15 +788,28 @@ def vision_loop():
             print("[Error] Failed to read camera frame.")
             break
 
+        now = time.time()
+        dt = now - last_frame_time
+        last_frame_time = now
+        if dt > 0:
+            instant_fps = 1.0 / dt
+            fps_ema = instant_fps if fps_ema is None else (0.9 * fps_ema + 0.1 * instant_fps)
         h, w, _ = frame.shape
         center_x, center_y = w // 2, h // 2
+        frame_counter += 1
 
         results = model.track(frame, persist=True, imgsz=640, classes=[0], verbose=False)
 
-        # DRAW STATIC CROSSHAIR
-        cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (255, 255, 255), 2)
-        cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (255, 255, 255), 2)
-        cv2.circle(frame, (center_x, center_y), CENTER_TOLERANCE, (255, 255, 255), 1)
+        if not perf_view:
+            # DRAW STATIC CROSSHAIR
+            cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (255, 255, 255), 2)
+            cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (255, 255, 255), 2)
+            cv2.circle(frame, (center_x, center_y), CENTER_TOLERANCE, (255, 255, 255), 1)
+
+            # FPS / frame time overlay (top-left)
+            if fps_ema is not None:
+                overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
+                cv2.putText(frame, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         target_box = None
         if results[0].boxes:
@@ -782,14 +833,17 @@ def vision_loop():
                 state.target_dx = int(pred_x - center_x)
                 state.target_dy = int(pred_y - center_y)
                 state.is_tracking = True
+                state.perf_target_x = int(pred_x)
+                state.perf_target_y = int(pred_y)
+                state.perf_has_target = True
                 
                 # Update ESP32 state for car control (thread-safe)
                 if enable_esp32:
-                    with state.lock:
-                        state.esp32_dx = int(pred_x - center_x)
-                        state.esp32_dy = int(pred_y - center_y)
-                        state.esp32_found = True
+                    state.esp32_dx = int(pred_x - center_x)
+                    state.esp32_dy = int(pred_y - center_y)
+                    state.esp32_found = True
 
+                # 4. DRAWING + MASKING
                 # 4. DRAWING + MASKING
                 is_locked = abs(state.target_dx) < CENTER_TOLERANCE and abs(state.target_dy) < CENTER_TOLERANCE
                 color = (0, 255, 0) if is_locked else (0, 165, 255) # Green if locked, Orange if moving
@@ -803,7 +857,7 @@ def vision_loop():
                 contour = None
                 head = None
                 upper_body = None
-                if roi_x2 > roi_x1 and roi_y2 > roi_y1:
+                if roi_x2 > roi_x1 and roi_y2 > roi_y1 and not disable_contours:
                     roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
                     if roi.size > 0:
                         person_mask = _segment_person(roi)
@@ -811,23 +865,24 @@ def vision_loop():
                         if contour is not None and show_frame:
                             head = _detect_head(contour, roi)
                             upper_body = _detect_upper_body(contour)
-
-                # Bounding Box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                # Prediction Dot
-                cv2.circle(frame, (int(pred_x), int(pred_y)), 5, (0, 0, 255), -1)
-                # Label
-                label = f"ID:{tracked_id} {' LOCKED' if is_locked else ' TRACKING'}"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                # Line from center to target
-                cv2.line(frame, (center_x, center_y), (int(pred_x), int(pred_y)), color, 1)
-
+                
+                if not perf_view:
+                    # Bounding Box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    # Prediction Dot
+                    cv2.circle(frame, (int(pred_x), int(pred_y)), 5, (0, 0, 255), -1)
+                    # Label
+                    label = f"ID:{tracked_id} {' LOCKED' if is_locked else ' TRACKING'}"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    # Line from center to target
+                    cv2.line(frame, (center_x, center_y), (int(pred_x), int(pred_y)), color, 1)
+                
                 # Optional: draw refined contour to visualize masking
-                if show_frame and contour is not None:
+                if not perf_view and show_frame and contour is not None:
                     cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [contour], -1, (0, 255, 0), 1)
-                if show_frame and head is not None:
+                if not perf_view and show_frame and head is not None:
                     cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [head], -1, (255, 0, 0), 1)
-                if show_frame and upper_body is not None:
+                if not perf_view and show_frame and upper_body is not None:
                     ux, uy, uw, uh = upper_body
                     cv2.rectangle(frame[roi_y1:roi_y2, roi_x1:roi_x2], (ux, uy), (ux + uw, uy + uh), (0, 165, 255), 1)
 
@@ -847,14 +902,29 @@ def vision_loop():
 
             else:
                 state.is_tracking = False
+                state.perf_has_target = False
                 # Update ESP32 state - person not found (thread-safe)
                 if enable_esp32:
-                    with state.lock:
-                        state.esp32_found = False
+                    state.esp32_found = False
                 if len(history) > 50: history.clear()
         if show_frame:
             try:
-                cv2.imshow("Turret View", frame)
+                if perf_view:
+                    display = frame.copy()
+                    display[:] = (0, 0, 0)
+                    if fps_ema is not None:
+                        overlay = f"FPS: {fps_ema:4.1f}  dt: {dt*1000:4.0f} ms"
+                        cv2.putText(display, overlay, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.putText(display, f"Frames: {frame_counter}", (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    with state.lock:
+                        has_t = state.perf_has_target
+                        tx = state.perf_target_x
+                        ty = state.perf_target_y
+                    if has_t:
+                        cv2.circle(display, (tx, ty), 6, (0, 255, 255), -1)
+                    cv2.imshow("Turret View", display)
+                else:
+                    cv2.imshow("Turret View", frame)
                 if not shown_first_frame:
                     print("[Video] OpenCV window created.")
                     shown_first_frame = True

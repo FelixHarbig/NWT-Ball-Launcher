@@ -16,16 +16,13 @@
 #define WEBSOCKET_PORT 80
 
 // ============================================================================
-// MOTOR PINS (Tank Drive)
+// MOTOR PINS (Stepper Driver - AccelStepper)
 // ============================================================================
-// Placeholder for motor driver - designed to be easily swapped for L298N, L293D, BTS7960, etc.
-#define LEFT_MOTOR_IN1   32  // Left motor direction pin 1
-#define LEFT_MOTOR_IN2   33  // Left motor direction pin 2
-#define LEFT_MOTOR_PWM   25  // Left motor speed (PWM)
+#define LEFT_MOTOR_STEP  25  // Left motor STEP pin
+#define LEFT_MOTOR_DIR   32  // Left motor DIR pin
 
-#define RIGHT_MOTOR_IN1  26  // Right motor direction pin 1
-#define RIGHT_MOTOR_IN2  27  // Right motor direction pin 2
-#define RIGHT_MOTOR_PWM  14  // Right motor speed (PWM)
+#define RIGHT_MOTOR_STEP 14  // Right motor STEP pin
+#define RIGHT_MOTOR_DIR  13  // Right motor DIR pin
 
 // ============================================================================
 // ULTRASONIC SENSOR PINS
@@ -46,14 +43,15 @@
 #define STATUS_LED       2   // Built-in LED
 
 // ============================================================================
-// MOTOR CONFIGURATION
+// MOTOR CONFIGURATION (AccelStepper)
 // ============================================================================
-#define PWM_FREQUENCY    1000    // PWM frequency in Hz
-#define PWM_RESOLUTION   8       // PWM resolution (8-bit = 0-255)
+#define MOTOR_INTERFACE_TYPE 1  // 1 = STEP + DIR driver
 
-// Motor speed limits (-100 to 100)
-#define MAX_MOTOR_SPEED  100
-#define MIN_MOTOR_SPEED  -100
+// Stepper speed limits (-100 to 100 in percentage, mapped to steps/sec)
+#define MAX_MOTOR_SPEED     100
+#define MIN_MOTOR_SPEED     -100
+#define MAX_STEP_SPEED      800    // Max steps per second
+#define STEP_ACCELERATION   400    // Steps per second^2
 
 // ============================================================================
 // SPEED SETTINGS
