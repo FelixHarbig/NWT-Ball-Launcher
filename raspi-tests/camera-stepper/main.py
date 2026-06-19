@@ -844,6 +844,7 @@ def vision_loop():
                     state.esp32_found = True
 
                 # 4. DRAWING + MASKING
+                # 4. DRAWING + MASKING
                 is_locked = abs(state.target_dx) < CENTER_TOLERANCE and abs(state.target_dy) < CENTER_TOLERANCE
                 color = (0, 255, 0) if is_locked else (0, 165, 255) # Green if locked, Orange if moving
                 
