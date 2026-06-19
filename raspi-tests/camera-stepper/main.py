@@ -374,7 +374,7 @@ class ESP32Client:
             await self.websocket.close()
         self.connected = False
     
-    async def send_track_info(self, dx, dy, found):
+    async def send_track_info(self, dx, dy, found, hold=False):
         """Send tracking information to ESP32"""
         if not self.connected or not self.websocket:
             return
@@ -385,6 +385,7 @@ class ESP32Client:
                 "dx": dx,
                 "dy": dy,
                 "found": found,
+                "hold": hold,
                 "timestamp": int(time.time() * 1000)
             }
             await self.websocket.send(json.dumps(message))
@@ -453,14 +454,39 @@ def esp32_worker():
                     await asyncio.sleep(2)
                     continue
             
-            # Get current tracking info from state
+            # Get current tracking info and turret state
             with state.lock:
-                dx = state.esp32_dx
-                dy = state.esp32_dy
+                raw_dx = state.esp32_dx
+                raw_dy = state.esp32_dy
                 found = state.esp32_found
+                tracking = state.is_tracking
+                pos_x = state.position_x
+                pos_y = state.position_y
+            
+            if tracking:
+                # Check if turret is at a limit and target is still beyond it
+                at_x_limit = (pos_x >= MAX_STEPS_X and raw_dx > 0) or (pos_x <= 0 and raw_dx < 0)
+                at_y_limit = (pos_y >= MAX_STEPS_Y and raw_dy > 0) or (pos_y <= 0 and raw_dy < 0)
+                
+                if at_x_limit or at_y_limit:
+                    # Turret can't reach target, move car to help
+                    dx = raw_dx
+                    dy = raw_dy
+                    hold = False
+                else:
+                    # Turret is handling tracking, car should stand by
+                    dx = 0
+                    dy = 0
+                    hold = True
+                send_found = True
+            else:
+                dx = 0
+                dy = 0
+                send_found = False
+                hold = False
             
             # Send tracking info to ESP32
-            await client.send_track_info(dx, dy, found)
+            await client.send_track_info(dx, dy, send_found, hold)
             
             # Small delay between sends
             await asyncio.sleep(0.1)
