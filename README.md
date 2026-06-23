@@ -169,7 +169,7 @@ flowchart TB
     end
 
     RPi -.->|"WebSocket JSON<br/>ws://192.168.4.1:80/ws"| ESP32
-    EWS_NF -.->|"{\"type\":\"track\",\"found\":false}"| E_PARSE
-    EWS_MOVE -.->|"{\"type\":\"track\",\"dx\":int,\"dy\":int,<br/>\"found\":true,\"hold\":false}"| E_PARSE
-    EWS_HOLD -.->|"{\"type\":\"track\",\"dx\":0,\"dy\":0,<br/>\"found\":true,\"hold\":true}"| E_PARSE
+    EWS_NF -.->|'{"type":"track","found":false}'| E_PARSE
+    EWS_MOVE -.->|'{"type":"track","dx":int,"dy":int,<br>"found":true,"hold":false}'| E_PARSE
+    EWS_HOLD -.->|'{"type":"track","dx":0,"dy":0,<br>"found":true,"hold":true}'| E_PARSE
 ```
