@@ -168,8 +168,8 @@ flowchart TB
         ELED --> EDELAY["delay(10)"] --> ELOOP
     end
 
-    RPi -.->|"WebSocket JSON<br/>ws://192.168.4.1:80/ws"| ESP32
-    EWS_NF -.->|'{"type":"track","found":false}'| E_PARSE
-    EWS_MOVE -.->|'{"type":"track","dx":int,"dy":int,<br>"found":true,"hold":false}'| E_PARSE
-    EWS_HOLD -.->|'{"type":"track","dx":0,"dy":0,<br>"found":true,"hold":true}'| E_PARSE
+    RPi -.->|WebSocket JSON<br/>ws://192.168.4.1:80/ws| ESP32
+    EWS_NF -.->|type=track, found=false| E_PARSE
+    EWS_MOVE -.->|type=track, dx=int, dy=int, found, nohold| E_PARSE
+    EWS_HOLD -.->|type=track, dx=0, dy=0, found, hold| E_PARSE
 ```
