@@ -637,6 +637,7 @@ def vision_loop():
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not cap.isOpened():
         print("[Error] Camera failed to open (cv2.VideoCapture(0)).")
         return
@@ -651,42 +652,38 @@ def vision_loop():
 
     # ---------- Person Masking Helpers ----------
     def _segment_person(roi_bgr):
-        """
-        Segment the person using GrabCut with a center foreground seed.
-        Returns a binary mask (uint8 0/255) same size as roi.
-        """
         h, w = roi_bgr.shape[:2]
         if h < 10 or w < 10:
             return np.ones((h, w), dtype="uint8") * 255
 
-        mask = np.zeros((h, w), np.uint8)
+        # Downscale 2x before GrabCut for ~4x speedup
+        scale = 0.5
+        small = cv2.resize(roi_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+        sh, sw = small.shape[:2]
+
+        mask = np.zeros((sh, sw), np.uint8)
         bg_model = np.zeros((1, 65), np.float64)
         fg_model = np.zeros((1, 65), np.float64)
 
-        # Initialize with rectangle
-        rect = (1, 1, max(2, w - 2), max(2, h - 2))
+        rect = (1, 1, max(2, sw - 2), max(2, sh - 2))
 
-        # Seed a center ellipse as sure-foreground to reduce background inclusion
-        seed_mask = np.zeros((h, w), np.uint8)
-        center = (w // 2, int(h * 0.45))
-        axes = (max(4, int(w * 0.2)), max(6, int(h * 0.3)))
+        seed_mask = np.zeros((sh, sw), np.uint8)
+        center = (sw // 2, int(sh * 0.45))
+        axes = (max(4, int(sw * 0.2)), max(6, int(sh * 0.3)))
         cv2.ellipse(seed_mask, center, axes, 0, 0, 360, 255, -1)
 
         try:
-            cv2.grabCut(roi_bgr, mask, rect, bg_model, fg_model, 2, cv2.GC_INIT_WITH_RECT)
-            # Promote seeded center to foreground
+            cv2.grabCut(small, mask, rect, bg_model, fg_model, 2, cv2.GC_INIT_WITH_RECT)
             mask[seed_mask == 255] = cv2.GC_FGD
-            cv2.grabCut(roi_bgr, mask, None, bg_model, fg_model, 2, cv2.GC_INIT_WITH_MASK)
+            cv2.grabCut(small, mask, None, bg_model, fg_model, 2, cv2.GC_INIT_WITH_MASK)
             mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype("uint8")
         except Exception:
-            mask = np.ones((h, w), dtype="uint8") * 255
+            mask = np.ones((sh, sw), dtype="uint8") * 255
 
-        # Morph cleanup
-        kernel = np.ones((5, 5), np.uint8)
+        kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
-        # Keep only largest contour to reduce background
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             largest = max(contours, key=cv2.contourArea)
@@ -694,8 +691,9 @@ def vision_loop():
             cv2.drawContours(cleaned, [largest], -1, 255, -1)
             mask = cleaned
 
-        # Slightly erode to avoid grabbing background edges
         mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
+
+        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
         return mask
 
     def _find_largest_contour(mask):
@@ -863,8 +861,9 @@ def vision_loop():
                         person_mask = _segment_person(roi)
                         contour = _find_largest_contour(person_mask)
                         if contour is not None and show_frame:
-                            head = _detect_head(contour, roi)
-                            upper_body = _detect_upper_body(contour)
+                            if frame_counter % 5 == 0:
+                                head = _detect_head(contour, roi)
+                                upper_body = _detect_upper_body(contour)
                 
                 if not perf_view:
                     # Bounding Box
@@ -877,9 +876,11 @@ def vision_loop():
                     # Line from center to target
                     cv2.line(frame, (center_x, center_y), (int(pred_x), int(pred_y)), color, 1)
                 
-                # Optional: draw refined contour to visualize masking
+                # Optional: draw simplified contour to visualize masking
                 if not perf_view and show_frame and contour is not None:
-                    cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [contour], -1, (0, 255, 0), 1)
+                    eps = 0.002 * cv2.arcLength(contour, True)
+                    simple = cv2.approxPolyDP(contour, eps, True)
+                    cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [simple], -1, (0, 255, 0), 1)
                 if not perf_view and show_frame and head is not None:
                     cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [head], -1, (255, 0, 0), 1)
                 if not perf_view and show_frame and upper_body is not None:
