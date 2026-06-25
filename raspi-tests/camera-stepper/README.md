@@ -34,6 +34,33 @@ The conversion.py script is needed to convert a .pt file into a .onnx file. This
 
 > Note: If using multiple cameras, update `cv2.VideoCapture(0)` to the correct device index.
 
+## 🎯 Calibration
+
+Before first use (or after any mechanical changes), calibrate the turret's range of motion.
+
+### How it works
+
+The turret **homes** both axes to their origin using Hall effect sensors (steps backward until triggered, set as position `0`). You then manually jog it to the **maximum physical extent** and save the step count to `config.json`.
+
+### Steps
+
+```bash
+python main.py --calibrate
+```
+
+1. **Auto-home** — motors step backward until both Hall sensors trigger. This sets `(0, 0)`.
+
+2. **Jog to max extent** using the keyboard:
+   - `W` / `S` — Y-axis up/down
+   - `A` / `D` — X-axis left/right
+   - Hold multiple keys (e.g. `W` + `D`) for diagonal movement
+
+   Move the turret to the farthest corner of the intended aiming range.
+
+3. **Press `Enter`** — saves current position as `max_steps_x` / `max_steps_y` in `config.json` and exits.
+
+> The range is always `0 → max_steps` measured from home outward in one direction. Repeat calibration if mechanical setup changes.
+
 ## 🔌 Wiring
 
 **TODO**
