@@ -34,6 +34,7 @@ parser.add_argument("--calibrate", action="store_true", help="Run max step calib
 parser.add_argument("--esp32_ip", type=str, default="192.168.4.1", help="ESP32 IP address for WebSocket connection")
 parser.add_argument("--esp32_port", type=int, default=80, help="ESP32 WebSocket port")
 parser.add_argument("--no_esp32", action="store_true", help="Disable ESP32 car control")
+parser.add_argument("--no_ball_sensor", action="store_true", help="Disable ball presence check")
 args=parser.parse_args()
 
 demo_mode = args.demo
@@ -44,8 +45,9 @@ calibration_mode = args.calibrate
 esp32_ip = args.esp32_ip
 esp32_port = args.esp32_port
 enable_esp32 = not args.no_esp32 and WEBSOCKETS_AVAILABLE
+enable_ball_sensor = not args.no_ball_sensor
 
-print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Contours: {not disable_contours}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
+print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Contours: {not disable_contours}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port}), Ball Sensor: {enable_ball_sensor}")
 
 if not demo_mode:
     import RPi.GPIO as GPIO
@@ -86,6 +88,7 @@ STEP_DELAY = 0.0015
 SERVO_PIN = 12 # PIN
 HALL_EFFECT_X_PIN = 16
 HALL_EFFECT_Y_PIN = 26
+BALL_SENSOR_PIN = 21  # Digital input: ball presence (IR break-beam / color sensor threshold)
 
 CONFIG_FILE = Path("config.json")
 if CONFIG_FILE.exists():
@@ -172,6 +175,11 @@ class TurretState:
         self.esp32_dy = 0
         self.esp32_found = False
 
+        # Reload / ball state
+        self.motor_ready = threading.Event()
+        self.motor_ready.set()
+        self.ball_present = False
+
         # Perf view target (screen coordinates)
         self.perf_target_x = 0
         self.perf_target_y = 0
@@ -201,6 +209,17 @@ GPIO.setup(HALL_EFFECT_X_PIN , GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.add_event_detect(HALL_EFFECT_X_PIN, GPIO.BOTH, callback=sensorCallback, bouncetime=50)
 GPIO.setup(HALL_EFFECT_Y_PIN , GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.add_event_detect(HALL_EFFECT_Y_PIN, GPIO.BOTH, callback=sensorCallback, bouncetime=50)
+
+# Ball sensor
+if enable_ball_sensor:
+    GPIO.setup(BALL_SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+else:
+    print("[Ball Sensor] Disabled via --no_ball_sensor")
+
+def ball_present():
+    if not enable_ball_sensor:
+        return True
+    return GPIO.input(BALL_SENSOR_PIN) == 0  # LOW = ball present (active-low sensor)
 
 # Calibration
 
@@ -333,11 +352,16 @@ def calibrate_steps():
     print(f"MAX_STEPS_X: {final_x}")
     print(f"MAX_STEPS_Y: {final_y}")
     
-    config_data = {"max_steps_x": final_x, "max_steps_y": final_y}
+    config_data = {}
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE, "r") as f:
+            config_data = json.load(f)
+    config_data["max_steps_x"] = final_x
+    config_data["max_steps_y"] = final_y
     
     try:
         with open(CONFIG_FILE, "w") as f:
-            json.dump(config_data, f)
+            json.dump(config_data, f, indent=2)
         print("Config.json updated successfully.")
     except Exception as e:
         print(f"Failed to save config: {e}")
@@ -579,7 +603,7 @@ def servo_worker():
             time.sleep(0.1)
 
 def piston_worker():
-    """Worker thread for piston stepper motor - retracts after a shot"""
+    """Worker thread for piston stepper motor — retract then extend after each shot"""
     print("[System] Piston Thread Started.")
     while state.running:
         trigger = False
@@ -591,19 +615,31 @@ def piston_worker():
             with state.lock:
                 state.piston_retracting = True
             print("[Piston] Retracting...")
-            
-            # Retract piston by moving stepper motor
+
             for _ in range(PISTON_RETRACT_STEPS):
                 if not state.running:
                     break
-                motor_piston.step(1)  # Move forward/retract direction
+                motor_piston.step(1)
                 time.sleep(STEP_DELAY)
-            
+
             motor_piston.stop()
-            
+
             with state.lock:
                 state.piston_retracting = False
             print("[Piston] Retraction complete.")
+
+            # Extend back to firing position
+            print("[Piston] Extending...")
+            for _ in range(PISTON_RETRACT_STEPS):
+                if not state.running:
+                    break
+                motor_piston.step(-1)
+                time.sleep(STEP_DELAY)
+
+            motor_piston.stop()
+            with state.lock:
+                state.motor_ready.set()
+            print("[Piston] Ready for next shot.")
         else:
             time.sleep(0.05)
 
@@ -897,9 +933,12 @@ def vision_loop():
 
                 if on_person:
                     print(f"[DEBUG] Target Met: Pos({int(tx)}, {int(ty)})")
-                    # Only fire if not already firing and piston is not retracting
-                    if not state.is_firing and not state.piston_retracting:
+                    has_ball = ball_present()
+                    state.ball_present = has_ball
+                    motor_ok = state.motor_ready.is_set()
+                    if not state.is_firing and not state.piston_retracting and has_ball and motor_ok:
                         state.is_firing = True
+                        state.motor_ready.clear()
 
             else:
                 state.is_tracking = False
