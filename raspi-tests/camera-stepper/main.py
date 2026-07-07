@@ -585,20 +585,20 @@ def servo_worker():
 
         # Don't fire if piston is still retracting
         if should_fire and not piston_retracting:
-            # Move to 90 degrees
-            servo_pwm.ChangeDutyCycle(7.5)
-            time.sleep(0.5) # Wait for servo to reach position
+            # Move to ~160 degrees (fire position)
+            servo_pwm.ChangeDutyCycle(12)
+            time.sleep(0.7)
 
             # Move back to 0 degrees
             servo_pwm.ChangeDutyCycle(2.5)
-            time.sleep(0.5) # Wait for servo to reach position
+            time.sleep(0.3)
 
             # Trigger piston retraction after shot
             with state.lock:
                 state.is_firing = False
                 state.piston_trigger = True
         else:
-            servo_pwm.ChangeDutyCycle(0)
+            servo_pwm.ChangeDutyCycle(2.5)
             time.sleep(0.1)
 
 def piston_worker():
