@@ -56,18 +56,17 @@ else:
     class DummyGPIO:
         BCM = "BCM"
         OUT = "OUT"
+        IN = "IN"
+        PUD_UP = "PUD_UP"
+        BOTH = "BOTH"
 
         def setmode(self, *a, **k): pass
         def setwarnings(self, *a, **k): pass
         def setup(self, *a, **k): pass
         def output(self, *a, **k): pass
+        def input(self, *a, **k): return 0
         def add_event_detect(self, *a, **k): pass
         def cleanup(self, *a, **k): pass
-
-        def IN(self, *a, **k): pass
-        def PUD_UP(self, *a, **k): pass
-        def BOTH(self, *a, **k): pass
-
 
         class PWM:
             def __init__(self, pin, freq): pass
@@ -85,6 +84,7 @@ MODEL_PATH = "yolo11n.onnx" # Use your converted NCNN model folder
 CENTER_TOLERANCE = 30  
 LEAD_FACTOR = 5
 STEP_DELAY = 0.0015
+PISTON_CYCLE_STEPS = 4096
 SERVO_PIN = 12 # PIN
 HALL_EFFECT_X_PIN = 16
 HALL_EFFECT_Y_PIN = 26
@@ -97,7 +97,6 @@ if CONFIG_FILE.exists():
         try:
             MAX_STEPS_X = int(data.get("max_steps_x"))
             MAX_STEPS_Y = int(data.get("max_steps_y")) # excact names needed in the config.json
-            PISTON_RETRACT_STEPS = int(data.get("piston_retract_steps", 512))
             if not MAX_STEPS_X or not MAX_STEPS_X:
                 assert ValueError("Your config file is missing values")
         except Exception as e:
@@ -603,7 +602,7 @@ def servo_worker():
             time.sleep(0.1)
 
 def piston_worker():
-    """Worker thread for piston stepper motor — retract then extend after each shot"""
+    """Worker thread for piston stepper — rotates spur gear one direction to disengage piston"""
     print("[System] Piston Thread Started.")
     while state.running:
         trigger = False
@@ -614,9 +613,9 @@ def piston_worker():
         if trigger:
             with state.lock:
                 state.piston_retracting = True
-            print("[Piston] Retracting...")
+            print("[Piston] Cycling...")
 
-            for _ in range(PISTON_RETRACT_STEPS):
+            for _ in range(PISTON_CYCLE_STEPS):
                 if not state.running:
                     break
                 motor_piston.step(1)
@@ -626,20 +625,8 @@ def piston_worker():
 
             with state.lock:
                 state.piston_retracting = False
-            print("[Piston] Retraction complete.")
-
-            # Extend back to firing position
-            print("[Piston] Extending...")
-            for _ in range(PISTON_RETRACT_STEPS):
-                if not state.running:
-                    break
-                motor_piston.step(-1)
-                time.sleep(STEP_DELAY)
-
-            motor_piston.stop()
-            with state.lock:
                 state.motor_ready.set()
-            print("[Piston] Ready for next shot.")
+            print("[Piston] Cycle complete, ready for next shot.")
         else:
             time.sleep(0.05)
 
