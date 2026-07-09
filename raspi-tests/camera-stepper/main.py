@@ -34,6 +34,7 @@ parser.add_argument("--calibrate", action="store_true", help="Run max step calib
 parser.add_argument("--esp32_ip", type=str, default="192.168.4.1", help="ESP32 IP address for WebSocket connection")
 parser.add_argument("--esp32_port", type=int, default=80, help="ESP32 WebSocket port")
 parser.add_argument("--no_esp32", action="store_true", help="Disable ESP32 car control")
+parser.add_argument("--no_ball_sensor", action="store_true", help="Disable ball presence check")
 args=parser.parse_args()
 
 demo_mode = args.demo
@@ -44,8 +45,9 @@ calibration_mode = args.calibrate
 esp32_ip = args.esp32_ip
 esp32_port = args.esp32_port
 enable_esp32 = not args.no_esp32 and WEBSOCKETS_AVAILABLE
+enable_ball_sensor = not args.no_ball_sensor
 
-print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Contours: {not disable_contours}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port})")
+print(f"[Config] Demo Mode: {demo_mode}, Show Video: {show_frame}, Perf View: {perf_view}, Contours: {not disable_contours}, Manual Calibration: {calibration_mode}, ESP32: {enable_esp32} ({esp32_ip}:{esp32_port}), Ball Sensor: {enable_ball_sensor}")
 
 if not demo_mode:
     import RPi.GPIO as GPIO
@@ -54,18 +56,17 @@ else:
     class DummyGPIO:
         BCM = "BCM"
         OUT = "OUT"
+        IN = "IN"
+        PUD_UP = "PUD_UP"
+        BOTH = "BOTH"
 
         def setmode(self, *a, **k): pass
         def setwarnings(self, *a, **k): pass
         def setup(self, *a, **k): pass
         def output(self, *a, **k): pass
+        def input(self, *a, **k): return 0
         def add_event_detect(self, *a, **k): pass
         def cleanup(self, *a, **k): pass
-
-        def IN(self, *a, **k): pass
-        def PUD_UP(self, *a, **k): pass
-        def BOTH(self, *a, **k): pass
-
 
         class PWM:
             def __init__(self, pin, freq): pass
@@ -83,9 +84,11 @@ MODEL_PATH = "yolo11n.onnx" # Use your converted NCNN model folder
 CENTER_TOLERANCE = 30  
 LEAD_FACTOR = 5
 STEP_DELAY = 0.0015
+PISTON_CYCLE_STEPS = 4096
 SERVO_PIN = 12 # PIN
 HALL_EFFECT_X_PIN = 16
 HALL_EFFECT_Y_PIN = 26
+BALL_SENSOR_PIN = 21  # Digital input: ball presence (IR break-beam / color sensor threshold)
 
 CONFIG_FILE = Path("config.json")
 if CONFIG_FILE.exists():
@@ -94,7 +97,6 @@ if CONFIG_FILE.exists():
         try:
             MAX_STEPS_X = int(data.get("max_steps_x"))
             MAX_STEPS_Y = int(data.get("max_steps_y")) # excact names needed in the config.json
-            PISTON_RETRACT_STEPS = int(data.get("piston_retract_steps", 512))
             if not MAX_STEPS_X or not MAX_STEPS_X:
                 assert ValueError("Your config file is missing values")
         except Exception as e:
@@ -172,6 +174,11 @@ class TurretState:
         self.esp32_dy = 0
         self.esp32_found = False
 
+        # Reload / ball state
+        self.motor_ready = threading.Event()
+        self.motor_ready.set()
+        self.ball_present = False
+
         # Perf view target (screen coordinates)
         self.perf_target_x = 0
         self.perf_target_y = 0
@@ -201,6 +208,17 @@ GPIO.setup(HALL_EFFECT_X_PIN , GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.add_event_detect(HALL_EFFECT_X_PIN, GPIO.BOTH, callback=sensorCallback, bouncetime=50)
 GPIO.setup(HALL_EFFECT_Y_PIN , GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.add_event_detect(HALL_EFFECT_Y_PIN, GPIO.BOTH, callback=sensorCallback, bouncetime=50)
+
+# Ball sensor
+if enable_ball_sensor:
+    GPIO.setup(BALL_SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+else:
+    print("[Ball Sensor] Disabled via --no_ball_sensor")
+
+def ball_present():
+    if not enable_ball_sensor:
+        return True
+    return GPIO.input(BALL_SENSOR_PIN) == 0  # LOW = ball present (active-low sensor)
 
 # Calibration
 
@@ -333,11 +351,16 @@ def calibrate_steps():
     print(f"MAX_STEPS_X: {final_x}")
     print(f"MAX_STEPS_Y: {final_y}")
     
-    config_data = {"max_steps_x": final_x, "max_steps_y": final_y}
+    config_data = {}
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE, "r") as f:
+            config_data = json.load(f)
+    config_data["max_steps_x"] = final_x
+    config_data["max_steps_y"] = final_y
     
     try:
         with open(CONFIG_FILE, "w") as f:
-            json.dump(config_data, f)
+            json.dump(config_data, f, indent=2)
         print("Config.json updated successfully.")
     except Exception as e:
         print(f"Failed to save config: {e}")
@@ -562,24 +585,24 @@ def servo_worker():
 
         # Don't fire if piston is still retracting
         if should_fire and not piston_retracting:
-            # Move to 90 degrees
-            servo_pwm.ChangeDutyCycle(7.5)
-            time.sleep(0.5) # Wait for servo to reach position
+            # Move to ~160 degrees (fire position)
+            servo_pwm.ChangeDutyCycle(12)
+            time.sleep(0.7)
 
             # Move back to 0 degrees
             servo_pwm.ChangeDutyCycle(2.5)
-            time.sleep(0.5) # Wait for servo to reach position
+            time.sleep(0.3)
 
             # Trigger piston retraction after shot
             with state.lock:
                 state.is_firing = False
                 state.piston_trigger = True
         else:
-            servo_pwm.ChangeDutyCycle(0)
+            servo_pwm.ChangeDutyCycle(2.5)
             time.sleep(0.1)
 
 def piston_worker():
-    """Worker thread for piston stepper motor - retracts after a shot"""
+    """Worker thread for piston stepper — rotates spur gear one direction to disengage piston"""
     print("[System] Piston Thread Started.")
     while state.running:
         trigger = False
@@ -590,20 +613,20 @@ def piston_worker():
         if trigger:
             with state.lock:
                 state.piston_retracting = True
-            print("[Piston] Retracting...")
-            
-            # Retract piston by moving stepper motor
-            for _ in range(PISTON_RETRACT_STEPS):
+            print("[Piston] Cycling...")
+
+            for _ in range(PISTON_CYCLE_STEPS):
                 if not state.running:
                     break
-                motor_piston.step(1)  # Move forward/retract direction
+                motor_piston.step(1)
                 time.sleep(STEP_DELAY)
-            
+
             motor_piston.stop()
-            
+
             with state.lock:
                 state.piston_retracting = False
-            print("[Piston] Retraction complete.")
+                state.motor_ready.set()
+            print("[Piston] Cycle complete, ready for next shot.")
         else:
             time.sleep(0.05)
 
@@ -637,6 +660,7 @@ def vision_loop():
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not cap.isOpened():
         print("[Error] Camera failed to open (cv2.VideoCapture(0)).")
         return
@@ -651,42 +675,38 @@ def vision_loop():
 
     # ---------- Person Masking Helpers ----------
     def _segment_person(roi_bgr):
-        """
-        Segment the person using GrabCut with a center foreground seed.
-        Returns a binary mask (uint8 0/255) same size as roi.
-        """
         h, w = roi_bgr.shape[:2]
         if h < 10 or w < 10:
             return np.ones((h, w), dtype="uint8") * 255
 
-        mask = np.zeros((h, w), np.uint8)
+        # Downscale 2x before GrabCut for ~4x speedup
+        scale = 0.5
+        small = cv2.resize(roi_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+        sh, sw = small.shape[:2]
+
+        mask = np.zeros((sh, sw), np.uint8)
         bg_model = np.zeros((1, 65), np.float64)
         fg_model = np.zeros((1, 65), np.float64)
 
-        # Initialize with rectangle
-        rect = (1, 1, max(2, w - 2), max(2, h - 2))
+        rect = (1, 1, max(2, sw - 2), max(2, sh - 2))
 
-        # Seed a center ellipse as sure-foreground to reduce background inclusion
-        seed_mask = np.zeros((h, w), np.uint8)
-        center = (w // 2, int(h * 0.45))
-        axes = (max(4, int(w * 0.2)), max(6, int(h * 0.3)))
+        seed_mask = np.zeros((sh, sw), np.uint8)
+        center = (sw // 2, int(sh * 0.45))
+        axes = (max(4, int(sw * 0.2)), max(6, int(sh * 0.3)))
         cv2.ellipse(seed_mask, center, axes, 0, 0, 360, 255, -1)
 
         try:
-            cv2.grabCut(roi_bgr, mask, rect, bg_model, fg_model, 2, cv2.GC_INIT_WITH_RECT)
-            # Promote seeded center to foreground
+            cv2.grabCut(small, mask, rect, bg_model, fg_model, 2, cv2.GC_INIT_WITH_RECT)
             mask[seed_mask == 255] = cv2.GC_FGD
-            cv2.grabCut(roi_bgr, mask, None, bg_model, fg_model, 2, cv2.GC_INIT_WITH_MASK)
+            cv2.grabCut(small, mask, None, bg_model, fg_model, 2, cv2.GC_INIT_WITH_MASK)
             mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype("uint8")
         except Exception:
-            mask = np.ones((h, w), dtype="uint8") * 255
+            mask = np.ones((sh, sw), dtype="uint8") * 255
 
-        # Morph cleanup
-        kernel = np.ones((5, 5), np.uint8)
+        kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
-        # Keep only largest contour to reduce background
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             largest = max(contours, key=cv2.contourArea)
@@ -694,8 +714,9 @@ def vision_loop():
             cv2.drawContours(cleaned, [largest], -1, 255, -1)
             mask = cleaned
 
-        # Slightly erode to avoid grabbing background edges
         mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
+
+        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
         return mask
 
     def _find_largest_contour(mask):
@@ -863,8 +884,9 @@ def vision_loop():
                         person_mask = _segment_person(roi)
                         contour = _find_largest_contour(person_mask)
                         if contour is not None and show_frame:
-                            head = _detect_head(contour, roi)
-                            upper_body = _detect_upper_body(contour)
+                            if frame_counter % 5 == 0:
+                                head = _detect_head(contour, roi)
+                                upper_body = _detect_upper_body(contour)
                 
                 if not perf_view:
                     # Bounding Box
@@ -877,9 +899,11 @@ def vision_loop():
                     # Line from center to target
                     cv2.line(frame, (center_x, center_y), (int(pred_x), int(pred_y)), color, 1)
                 
-                # Optional: draw refined contour to visualize masking
+                # Optional: draw simplified contour to visualize masking
                 if not perf_view and show_frame and contour is not None:
-                    cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [contour], -1, (0, 255, 0), 1)
+                    eps = 0.002 * cv2.arcLength(contour, True)
+                    simple = cv2.approxPolyDP(contour, eps, True)
+                    cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [simple], -1, (0, 255, 0), 1)
                 if not perf_view and show_frame and head is not None:
                     cv2.drawContours(frame[roi_y1:roi_y2, roi_x1:roi_x2], [head], -1, (255, 0, 0), 1)
                 if not perf_view and show_frame and upper_body is not None:
@@ -896,9 +920,12 @@ def vision_loop():
 
                 if on_person:
                     print(f"[DEBUG] Target Met: Pos({int(tx)}, {int(ty)})")
-                    # Only fire if not already firing and piston is not retracting
-                    if not state.is_firing and not state.piston_retracting:
+                    has_ball = ball_present()
+                    state.ball_present = has_ball
+                    motor_ok = state.motor_ready.is_set()
+                    if not state.is_firing and not state.piston_retracting and has_ball and motor_ok:
                         state.is_firing = True
+                        state.motor_ready.clear()
 
             else:
                 state.is_tracking = False
